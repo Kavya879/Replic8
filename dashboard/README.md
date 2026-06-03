@@ -1,6 +1,6 @@
 # Next.js 15 Dashboard Scaffold
 
-This folder defines the folder structure and UI architecture for a Next.js 15 dashboard built with App Router, TypeScript, Tailwind CSS, and ShadCN UI.
+This folder defines the folder structure and UI architecture for a Next.js 15 dashboard built with App Router, JavaScript/JSX, Tailwind CSS, ShadCN UI, Recharts, and a WebSocket-driven realtime layer.
 
 ## Design Direction
 
@@ -12,6 +12,7 @@ The interface is intended to feel like an enterprise observability console simil
 - chart-heavy layouts for time-series and trend analysis
 - responsive navigation with a persistent shell
 - filters and time-range controls available at the page header level
+- charts update live without refresh through pushed metric snapshots
 
 ## Route Structure
 
@@ -36,13 +37,19 @@ The dashboard is organized as a shell plus page-level analytics surfaces.
 - `components/charts`: time-series charts, latency graphs, replication lag charts, and heatmaps.
 - `components/tables`: query tables, replica inventories, event lists, and drill-down grids.
 
+### Realtime Layer
+
+- `lib/websocket`: WebSocket server that polls Prometheus every 5 seconds and broadcasts the latest snapshot.
+- `lib/hooks`: client hook that opens the WebSocket connection and updates React state as messages arrive.
+- `components/charts`: Recharts surfaces that rerender automatically when snapshot history changes.
+
 ### Shared UI Layer
 
 - `components/ui`: ShadCN UI primitives used across the dashboard.
 - `lib/utils`: shared formatting, thresholds, and helper functions.
 - `lib/hooks`: reusable data-fetching and polling hooks.
 - `lib/api`: data access adapters for cluster, metrics, and analytics endpoints.
-- `types`: domain models for cluster nodes, replicas, query records, and metric payloads.
+- `types`: domain model notes for cluster nodes, replicas, query records, and metric payloads.
 
 ### Styling Layer
 
@@ -70,6 +77,14 @@ A performance page for SQL traffic, routing decisions, latency distributions, an
 
 A system-level page for CPU, memory, process pressure, and resource saturation.
 
+## Realtime Architecture
+
+1. The WebSocket server polls Prometheus every 5 seconds.
+2. It packages the latest CPU, RAM, connection, replication lag, and query-latency values into a single snapshot.
+3. The client hook subscribes to the socket and stores the live snapshot plus a local time series history.
+4. Recharts components consume the hook state and redraw immediately when new data arrives.
+5. ShadCN Cards provide the metric surfaces that frame the charts and KPI summaries.
+
 ## Folder Tree
 
 - `dashboard/app/(dashboard)/overview`
@@ -92,4 +107,4 @@ A system-level page for CPU, memory, process pressure, and resource saturation.
 
 ## Notes
 
-No application code has been added yet. This scaffold is limited to structure and UI architecture so the implementation can be generated in a later step.
+The dashboard is intentionally structured so the realtime transport, metric data model, and visual components remain separate.
