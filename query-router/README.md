@@ -4,16 +4,14 @@ Query Router is a small Node.js Express service that accepts SQL over REST, clas
 
 ## Routing Workflow
 
-1. A client sends SQL to `POST /query`.
-2. The service normalizes the statement by trimming whitespace and skipping leading comments.
-3. The classifier inspects the first executable keyword.
-4. `SELECT` queries are marked as read-only and routed to a replica pool.
-5. The service continuously monitors each replica by collecting CPU, memory, active connection, and query-latency metrics.
-6. A weighted score is calculated for every replica on each monitoring cycle.
-7. The replica with the lowest score receives the next read query.
-8. `INSERT`, `UPDATE`, and `DELETE` queries are marked as write operations and routed to the primary pool.
-9. The controller runs the query through the selected `pg.Pool` and returns the database response as JSON.
-10. If the selected replica fails, the router falls back to the next lowest-scoring replica before failing the request.
+1. The monitor probes every replica every 5 seconds.
+2. It captures CPU, memory, active connection, and query-latency data.
+3. Each replica is classified as `Healthy`, `Warning`, or `Down`.
+4. `Down` replicas are removed from the routing pool immediately.
+5. SQL requests are classified as read or write.
+6. Read queries go to the lowest-scoring available replica.
+7. Write queries go to the primary.
+8. Every status change is broadcast over WebSocket so the dashboard updates immediately.
 
 ## Scoring Algorithm
 

@@ -23,7 +23,7 @@ export function useRealtimeMetrics() {
   const [history, setHistory] = useState([]);
 
   useEffect(() => {
-    const socket = new WebSocket(process.env.NEXT_PUBLIC_METRICS_WS_URL || 'ws://localhost:8081');
+    const socket = new WebSocket(process.env.NEXT_PUBLIC_METRICS_WS_URL || 'ws://localhost:3000/ws/cluster');
 
     socket.addEventListener('message', (event) => {
       const payload = JSON.parse(event.data);
@@ -35,6 +35,10 @@ export function useRealtimeMetrics() {
           value: payload.system.cpuPercent
         }
       ]);
+    });
+
+    socket.addEventListener('error', () => {
+      setSnapshot((current) => current);
     });
 
     return () => {

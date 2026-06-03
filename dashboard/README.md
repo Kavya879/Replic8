@@ -39,7 +39,7 @@ The dashboard is organized as a shell plus page-level analytics surfaces.
 
 ### Realtime Layer
 
-- `lib/websocket`: WebSocket server that polls Prometheus every 5 seconds and broadcasts the latest snapshot.
+- `lib/websocket`: live cluster snapshot connection helpers used by the dashboard client.
 - `lib/hooks`: client hook that opens the WebSocket connection and updates React state as messages arrive.
 - `components/charts`: Recharts surfaces that rerender automatically when snapshot history changes.
 
@@ -79,11 +79,17 @@ A system-level page for CPU, memory, process pressure, and resource saturation.
 
 ## Realtime Architecture
 
-1. The WebSocket server polls Prometheus every 5 seconds.
-2. It packages the latest CPU, RAM, connection, replication lag, and query-latency values into a single snapshot.
+1. Query Router monitors replica health every 5 seconds.
+2. When a node changes state, the router broadcasts the new cluster snapshot over WebSocket immediately.
 3. The client hook subscribes to the socket and stores the live snapshot plus a local time series history.
 4. Recharts components consume the hook state and redraw immediately when new data arrives.
 5. ShadCN Cards provide the metric surfaces that frame the charts and KPI summaries.
+
+## Node Status
+
+- `Healthy`: replica is available and within normal operating thresholds.
+- `Warning`: replica is reachable but under pressure or degraded.
+- `Down`: replica is unavailable and removed from the routing pool.
 
 ## Folder Tree
 

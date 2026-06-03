@@ -10,7 +10,7 @@ function isRetryableConnectionError(error) {
 
 function createPoolRouter(primaryPool, replicaMonitor) {
   function orderedReplicas() {
-    return replicaMonitor.getStateSnapshot();
+    return replicaMonitor.getStateSnapshot().filter((replica) => replica.status !== 'Down');
   }
 
   async function routeRead(sql, params) {
@@ -30,6 +30,7 @@ function createPoolRouter(primaryPool, replicaMonitor) {
       try {
         const result = await replica.pool.query(sql, params);
         replicaMonitor.updateQueryLatency(replica.name, Date.now() - startedAt);
+        replicaMonitor.markReplicaRecovered(replica.name);
 
         return {
           poolLabel: replica.name,
