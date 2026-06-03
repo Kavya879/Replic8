@@ -5,7 +5,8 @@ function dockerRequest(pathname) {
     const request = http.request({
       socketPath: '/var/run/docker.sock',
       path: pathname,
-      method: 'GET'
+      method: 'GET',
+      timeout: 2000
     }, (response) => {
       let body = '';
 
@@ -25,6 +26,11 @@ function dockerRequest(pathname) {
           reject(error);
         }
       });
+    });
+
+    request.on('timeout', () => {
+      request.destroy();
+      reject(new Error('Docker API request timed out'));
     });
 
     request.on('error', reject);

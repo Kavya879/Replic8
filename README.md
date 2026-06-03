@@ -1,81 +1,181 @@
-# PostgreSQL 16 Streaming Replication Cluster
+# 🐘 Postgres Replication Cluster & Dynamic Query Router
 
-This workspace contains the Docker deployment for a PostgreSQL 16 cluster plus a Node.js Express query-routing service.
+A complete, production-grade local database architecture featuring **PostgreSQL 16 streaming replication**, a custom **Node.js dynamic query router**, and a real-time **Next.js monitoring dashboard**. 
 
-## Topology
+This stack is pre-configured to work out of the box (including on Windows/macOS/Linux) to demonstrate automatic load-balancing, live metrics calculation, and automatic replica failover.
 
-The Compose stack starts three PostgreSQL 16 containers:
+---
 
-- `postgres-primary`: the writable primary node that accepts client writes and streams WAL changes.
-- `postgres-replica-1`: a read-only standby that continuously replays WAL from the primary.
-- `postgres-replica-2`: a second read-only standby with the same replication setup.
+## 🎯 The Problem It Solves (The "Why")
 
-All three containers run on a private Docker network named `pg-cluster`. No ports are published to the host, so the cluster is reachable only from other containers on that network unless you add port mappings later.
+### 1. The Scaling Bottleneck
+In typical web applications, **read queries** (e.g., fetching user profiles, loading dashboards, generating reports) outnumber **write queries** (e.g., creating accounts, updating orders) by up to 10:1 or more. When a single database server handles both reads and writes:
+- Database CPU and memory spike under heavy read load.
+- Critical write transactions get queued, slowing down or locking the entire app.
 
-The `query-router` service joins the same network and exposes a REST API on host port `3000` so clients can submit SQL without talking directly to the database nodes.
+### 2. High Availability & Disaster Recovery
+If your single database server crashes, your entire application goes down. 
 
-Prometheus, node exporter, and PostgreSQL exporters are added alongside the database and router services so the whole stack can be observed from one place.
+### 3. How This Project Solves It
+This project implements the industry-standard **Primary-Replica** architecture:
+*   **The Primary (`postgres-primary`)**: The source of truth. It handles all database writes (`INSERT`, `UPDATE`, `DELETE`, etc.).
+*   **The Replicas (`postgres-replica-1`, `postgres-replica-2`)**: Read-only copies that continuously clone the primary database in real-time.
+*   **The Query Router (`query-router`)**: A smart proxy that intercepts SQL queries. It automatically parses the SQL:
+    *   **Writes** are routed to the Primary.
+    *   **Reads** are routed to the most optimal, healthy replica based on live performance metrics (CPU, Memory, Latency, Connections).
+*   **Dynamic Failover**: If a replica container crashes, the query router automatically detects this and removes it from the read pool instantly. Read queries continue serving uninterrupted from the remaining healthy replica.
 
-## Folder Structure
+---
 
-- `docker-compose.yml`: defines the cluster services, private network, and persistent volumes.
-- `.env.example`: placeholder values for the PostgreSQL and replication credentials.
-- `query-router/`: Node.js Express service that classifies SQL and routes it to the correct PostgreSQL pool.
-- `monitoring/prometheus.yml`: Prometheus scrape targets for the router and exporters.
-- `docker/postgres/primary/`: build context and startup logic for the primary container.
-- `docker/postgres/replica/`: build context and startup logic for the replica containers.
+## 🏗️ Architecture Overview
 
-## Container Responsibilities
+```mermaid
+graph TD
+    Client[Next.js App / Client] -->|Queries| Router[Query Router :3002]
+    Router -->|Writes| Primary[(Postgres Primary :15432)]
+    Router -->|Reads - Score Balanced| Replica1[(Postgres Replica 1 :15433)]
+    Router -->|Reads - Score Balanced| Replica2[(Postgres Replica 2 :15434)]
+    
+    Primary -.->|Real-time WAL Replication| Replica1
+    Primary -.->|Real-time WAL Replication| Replica2
+    
+    Monitor[Replica Monitor] -->|Health & Docker Stats| Router
+    Router -->|Live Cluster Snapshot via WS| Dashboard[Next.js Dashboard :3001]
+```
 
-`postgres-primary`
+---
 
-- Initializes the database cluster on first start.
-- Creates the replication user.
-- Configures PostgreSQL for streaming replication with WAL sender support.
-- Stores its data in the `pg-primary-data` Docker volume.
+## 🛠️ Technology Stack
 
-`postgres-replica-1` and `postgres-replica-2`
+*   **Databases**: PostgreSQL 16 (configured for WAL replication).
+*   **Query Router**: Node.js, Express, `pg` (node-postgres), `ws` (WebSockets), `prom-client` (Prometheus metrics).
+*   **Monitoring**: Prometheus (scraping router metrics + `postgres-exporter` container instances).
+*   **Dashboard**: Next.js, React, TailwindCSS, Chart.js.
 
-- Wait for the primary to become healthy.
-- Take a base backup from the primary with `pg_basebackup`.
-- Start as hot standbys and keep replaying WAL changes from the primary.
-- Store their own copies of data in separate Docker volumes.
+---
 
-## How To Use
+## ⚡ Quick Start (Replicate the Project)
 
-1. Copy `.env.example` to `.env` and update the passwords.
-2. Start the stack with `docker compose up -d --build`.
-3. Check health with `docker compose ps`.
+### Prerequisites
+Make sure you have installed:
+*   [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+*   [Node.js (v18+)](https://nodejs.org/)
 
-## Replication Model
+---
 
-This setup uses physical streaming replication:
+### Step 1: Clone and Set Up Environment Config
+Copy the sample environment file in the root directory:
+```powershell
+copy .env.example .env
+```
+Edit `.env` if you want to customize your database names or passwords. By default, it contains pre-configured secure credentials.
 
-- the primary writes WAL records
-- each replica keeps a base backup and continuously replays WAL
-- replicas stay read-only unless you later promote one manually
+---
 
-## Monitoring Architecture
+### Step 2: Spin Up the Docker Stack
+Run the following command to build and launch all database containers, exporters, and the query router:
+```powershell
+docker compose up -d --build
+```
+Verify everything is running correctly:
+```powershell
+docker compose ps
+```
+*Expected output: All 8 containers (`postgres-primary`, `postgres-replica-1`, `postgres-replica-2`, `query-router`, `query-router-proxy`, `prometheus`, and exporters) are status `running (healthy)`.*
 
-Prometheus scrapes four metric sources:
+---
 
-- `query-router:3000/metrics` for query latency, routing counts, and live replica scores.
-- `node-exporter:9100` for CPU and RAM metrics from the Docker host.
-- `postgres-exporter-primary:9187` for primary database metrics including connection activity.
-- `postgres-exporter-replica-1:9187` and `postgres-exporter-replica-2:9187` for replica database metrics including replication lag.
+### Step 3: Run the Dashboard UI
+1. Navigate into the dashboard directory:
+   ```powershell
+   cd dashboard
+   ```
+2. Install client dependencies:
+   ```powershell
+   npm install
+   ```
+3. Run the Next.js development server:
+   ```powershell
+   npm run dev
+   ```
+4. Open [http://localhost:3001](http://localhost:3001) in your browser. You will be greeted with the live system dashboard updating in real-time every 5 seconds.
 
-The PostgreSQL exporters are sidecars that speak directly to their assigned database nodes. Query Router owns application-level observability, while node exporter reports machine-level resource utilization.
+---
 
-## Prometheus Flow
+## 🚀 How to Use & Test the Project
 
-1. Prometheus scrapes the exporters on a fixed interval.
-2. Node exporter reports CPU and RAM for the Docker host.
-3. PostgreSQL exporters report connections and replication lag.
-4. Query Router reports query latency and the weighted replica score used for routing.
-5. Dashboards and alerts can be built from these metrics without changing the routing path.
+### 1. Connecting to the Database Cluster
+If you use a GUI like **pgAdmin** or **DBeaver**, you can connect to the nodes individually from your host machine using:
+*   **Primary Port**: `127.0.0.1:15432`
+*   **Replica 1 Port**: `127.0.0.1:15433`
+*   **Replica 2 Port**: `127.0.0.1:15434`
+*   *Database Name:* `appdb` (or customized in `.env`)
+*   *User:* `postgres`
 
-## Notes
+---
 
-- The cluster is intentionally isolated on an internal Docker network.
-- Persistent volumes keep data across container restarts.
-- The query router is intentionally modular so the classifier, pool selection, and HTTP layers can evolve independently.
+### 2. Testing Read/Write Routing
+The Query Router listens at `http://localhost:3002/query`. You can send SQL queries via POST requests.
+
+#### A. Execute a Write (Routes to Primary)
+```bash
+curl -X POST http://localhost:3002/query \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "INSERT INTO users (name, email) VALUES ('\''Alice'\'', '\''alice@example.com'\'')"}'
+```
+*Response will show `poolLabel: primary`.*
+
+#### B. Execute a Read (Routes to best Replica)
+```bash
+curl -X POST http://localhost:3002/query \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT * FROM users"}'
+```
+*Response will show `poolLabel: postgres-replica-1` or `postgres-replica-2` depending on which one currently has the lower load score.*
+
+---
+
+### 3. Testing Dynamic Failover (Killing a Node)
+This is where you can see the dynamic updates in action:
+1. **Stop one replica container**:
+   ```powershell
+   docker compose stop postgres-replica-1
+   ```
+2. **Observe the Dashboard**:
+   - Within **2 seconds**, `postgres-replica-1`'s status pill changes to **Down** (red).
+   - Its load metrics (CPU, Memory, Connections, and Latency) instantly reset to **0**.
+   - The cluster system-wide averages recalculate using only the remaining **active** replica (`postgres-replica-2`), preventing the offline node's metrics from corrupting system-wide averages.
+3. **Execute Reads**:
+   - Run more read queries through `http://localhost:3002/query`. You will notice that 100% of read queries now route to `postgres-replica-2`. No queries fail!
+4. **Bring the Replica Back Online**:
+   ```powershell
+   docker compose start postgres-replica-1
+   ```
+   *Within seconds, the health monitor detects the container is back up. The status pill changes back to **Healthy** (green) and queries begin distributing across both replicas once again.*
+
+---
+
+### 4. Testing Client Reconnection
+If you restart the query router (`docker compose restart query-router`), the dashboard UI connection will automatically close and attempt reconnection every 2 seconds. Once the query router is back online, the dashboard re-establishes the connection dynamically without requiring a page refresh.
+
+---
+
+## 📊 Live Scoring Formula
+Replicas are ranked based on a composite score where **lower is better**.
+The score is calculated using real-time system resources and database statistics:
+
+$$\text{Score} = w_{\text{cpu}} \cdot \frac{\text{CPU}\%}{100} + w_{\text{mem}} \cdot \frac{\text{Mem}\%}{100} + w_{\text{conn}} \cdot \frac{\text{Connections}}{\text{PoolMax}} + w_{\text{lat}} \cdot \frac{\text{Latency}}{\text{TargetLatency}} + \text{StalePenalty}$$
+
+*   **Weights** are fully configurable in `.env`.
+*   **Stale Nodes** or **Down Nodes** receive an `Infinity` score and are immediately removed from read routing.
+
+---
+
+## 🔍 Troubleshooting
+
+*   **Dashboard is blank / WebSocket doesn't connect**: 
+    Verify that the Query Router Docker stack is running (`docker compose ps`) and that the port mapping for Caddy/proxy (`3002:3002`) is open.
+*   **Replicas never become healthy**:
+    Check replica logs with `docker compose logs -f postgres-replica-1` to verify replication credentials match the primary `.env`.
+*   **Docker Socket Permissions**:
+    The router queries `/var/run/docker.sock` to fetch CPU/Memory stats. Ensure your Docker Desktop has socket sharing enabled.

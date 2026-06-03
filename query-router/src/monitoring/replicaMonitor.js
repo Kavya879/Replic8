@@ -1,4 +1,4 @@
-const { collectContainerMetrics } = require('./dockerMetrics');
+const { collectContainerMetrics, promoteContainer } = require('./dockerMetrics');
 const { calculateReplicaScore } = require('../routing/replicaScorer');
 
 const NODE_STATUS = {
@@ -54,7 +54,6 @@ function createReplicaMonitor(replicaPools, config) {
 
       return {
         name: replica.name,
-        pool: replica.pool,
         serviceName: replica.serviceName,
         status: metrics.status || deriveStatus(metrics, config),
         metrics,
@@ -83,19 +82,20 @@ function createReplicaMonitor(replicaPools, config) {
 
   function getClusterSnapshot() {
     const replicas = getReplicas();
+    const activeReplicas = replicas.filter((replica) => replica.status !== NODE_STATUS.DOWN);
 
     return {
       timestamp: new Date().toISOString(),
       replicas,
       system: {
-        cpuPercent: replicas.length ? replicas.reduce((total, replica) => total + Number(replica.metrics.cpuPercent || 0), 0) / replicas.length : 0,
-        memoryPercent: replicas.length ? replicas.reduce((total, replica) => total + Number(replica.metrics.memoryPercent || 0), 0) / replicas.length : 0,
-        connectionCount: replicas.reduce((total, replica) => total + Number(replica.metrics.activeConnections || 0), 0),
-        replicationLagMs: replicas.length ? Math.max(...replicas.map((replica) => Number(replica.metrics.lastProbeLatencyMs || 0))) : 0
+        cpuPercent: activeReplicas.length ? activeReplicas.reduce((total, replica) => total + Number(replica.metrics.cpuPercent || 0), 0) / activeReplicas.length : 0,
+        memoryPercent: activeReplicas.length ? activeReplicas.reduce((total, replica) => total + Number(replica.metrics.memoryPercent || 0), 0) / activeReplicas.length : 0,
+        connectionCount: activeReplicas.reduce((total, replica) => total + Number(replica.metrics.activeConnections || 0), 0),
+        replicationLagMs: activeReplicas.length ? Math.max(...activeReplicas.map((replica) => Number(replica.metrics.lastProbeLatencyMs || 0))) : 0
       },
       queries: {
-        p50LatencyMs: replicas.length ? replicas.reduce((total, replica) => total + Number(replica.metrics.averageLatencyMs || 0), 0) / replicas.length : 0,
-        p95LatencyMs: replicas.length ? Math.max(...replicas.map((replica) => Number(replica.metrics.averageLatencyMs || 0))) : 0,
+        p50LatencyMs: activeReplicas.length ? activeReplicas.reduce((total, replica) => total + Number(replica.metrics.averageLatencyMs || 0), 0) / activeReplicas.length : 0,
+        p95LatencyMs: activeReplicas.length ? Math.max(...activeReplicas.map((replica) => Number(replica.metrics.averageLatencyMs || 0))) : 0,
         requestsPerSecond: 0
       }
     };
@@ -166,8 +166,13 @@ function createReplicaMonitor(replicaPools, config) {
         lastError: error.message,
         lastUpdatedAt: startedAt,
         status: NODE_STATUS.DOWN,
-        score: Number.POSITIVE_INFINITY
+        score: Number.POSITIVE_INFINITY,
+        cpuPercent: 0,
+        memoryPercent: 0,
+        activeConnections: 0,
+        averageLatencyMs: 0
       });
+      emitChange('replica-down');
     }
   }
 
@@ -271,7 +276,11 @@ function createReplicaMonitor(replicaPools, config) {
       lastError: errorMessage,
       lastUpdatedAt: Date.now(),
       status: NODE_STATUS.DOWN,
-      score: Number.POSITIVE_INFINITY
+      score: Number.POSITIVE_INFINITY,
+      cpuPercent: 0,
+      memoryPercent: 0,
+      activeConnections: 0,
+      averageLatencyMs: 0
     });
 
     emitChange('replica-down');

@@ -10,6 +10,8 @@ services:
       REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-change-me-replication-password}
     volumes:
       - pg-primary-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:15432:5432"
     expose:
       - "5432"
     healthcheck:
@@ -20,6 +22,7 @@ services:
     restart: unless-stopped
     networks:
       - pg-cluster
+      - public
 
   query-router:
     build:
@@ -44,8 +47,6 @@ services:
       MEMORY_WEIGHT: "0.25"
       CONNECTION_WEIGHT: "0.20"
       LATENCY_WEIGHT: "0.25"
-    ports:
-      - "3000:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
@@ -58,6 +59,26 @@ services:
     restart: unless-stopped
     networks:
       - pg-cluster
+      - public
+
+  query-router-proxy:
+    image: caddy:2.8.4-alpine
+    entrypoint:
+      - caddy
+    command:
+      - reverse-proxy
+      - --from
+      - :3002
+      - --to
+      - query-router:3000
+    ports:
+      - "3002:3002"
+    depends_on:
+      - query-router
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+      - public
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -71,26 +92,27 @@ services:
       - "9090:9090"
     depends_on:
       - query-router
-      - node-exporter
+      # - node-exporter
       - postgres-exporter-primary
       - postgres-exporter-replica-1
       - postgres-exporter-replica-2
     restart: unless-stopped
     networks:
       - pg-cluster
+      - public
 
-  node-exporter:
-    image: prom/node-exporter:v1.8.2
-    command:
-      - --path.rootfs=/host
-    pid: host
-    volumes:
-      - /:/host:ro,rslave
-    ports:
-      - "9100:9100"
-    restart: unless-stopped
-    networks:
-      - pg-cluster
+  # node-exporter:
+  #   image: prom/node-exporter:v1.8.2
+  #   command:
+  #     - --path.rootfs=/host
+  #   pid: host
+  #   volumes:
+  #     - /:/host:ro,rslave
+  #   ports:
+  #     - "9100:9100"
+  #   restart: unless-stopped
+  #   networks:
+  #     - pg-cluster
 
   postgres-exporter-primary:
     image: prometheuscommunity/postgres-exporter:v0.15.0
@@ -104,6 +126,7 @@ services:
     restart: unless-stopped
     networks:
       - pg-cluster
+      - public
 
   postgres-exporter-replica-1:
     image: prometheuscommunity/postgres-exporter:v0.15.0
@@ -143,6 +166,8 @@ services:
       REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-change-me-replication-password}
     volumes:
       - pg-replica-1-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:15433:5432"
     expose:
       - "5432"
     depends_on:
@@ -169,6 +194,8 @@ services:
       REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-change-me-replication-password}
     volumes:
       - pg-replica-2-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:15434:5432"
     expose:
       - "5432"
     depends_on:
@@ -192,3 +219,4 @@ volumes:
 networks:
   pg-cluster:
     internal: true
+  public:

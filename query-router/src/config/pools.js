@@ -1,6 +1,6 @@
 const { Pool } = require('pg');
 
-function createPool({ host, port, database, user, password, max, connectionTimeoutMillis, applicationName }) {
+function createPool({ host, port, database, user, password, max, connectionTimeoutMillis, queryTimeoutMillis, applicationName }) {
   return new Pool({
     host,
     port,
@@ -9,6 +9,7 @@ function createPool({ host, port, database, user, password, max, connectionTimeo
     password,
     max,
     connectionTimeoutMillis,
+    query_timeout: queryTimeoutMillis || 2000,
     idleTimeoutMillis: 30000,
     application_name: applicationName
   });
@@ -19,6 +20,7 @@ function createPools(config) {
     ...config.primary,
     max: config.poolMax,
     connectionTimeoutMillis: config.poolConnectionTimeoutMs,
+    queryTimeoutMillis: 2000,
     applicationName: 'query-router-primary'
   });
 
@@ -31,6 +33,7 @@ function createPools(config) {
     password: config.replicas.password,
     max: config.poolMax,
     connectionTimeoutMillis: config.poolConnectionTimeoutMs,
+    queryTimeoutMillis: 2000,
     applicationName: `query-router-replica-${index + 1}`
   })).map((pool, index) => ({
     name: config.replicas.hosts[index],
