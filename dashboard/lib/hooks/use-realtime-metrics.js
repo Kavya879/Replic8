@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 
 const initialState = {
-  timestamp: new Date().toISOString(),
+    timestamp: null,
   replicas: [],
   system: {
     cpuPercent: 0,
@@ -23,26 +23,54 @@ export function useRealtimeMetrics() {
   const [history, setHistory] = useState([]);
 
   useEffect(() => {
-    const socket = new WebSocket(process.env.NEXT_PUBLIC_METRICS_WS_URL || 'ws://localhost:3000/ws/cluster');
+    let socket = null;
+    let reconnectTimeout = null;
+    let isMounted = true;
 
-    socket.addEventListener('message', (event) => {
-      const payload = JSON.parse(event.data);
-      setSnapshot(payload);
-      setHistory((current) => [
-        ...current.slice(-119),
-        {
-          timestamp: payload.timestamp,
-          value: payload.system.cpuPercent
+    function connect() {
+      if (!isMounted) return;
+
+      socket = new WebSocket(process.env.NEXT_PUBLIC_METRICS_WS_URL || 'ws://localhost:3002/ws/cluster');
+
+      socket.addEventListener('message', (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          setSnapshot(payload);
+          setHistory((current) => [
+            ...current.slice(-119),
+            {
+              timestamp: payload.timestamp,
+              value: payload.system?.cpuPercent || 0
+            }
+          ]);
+        } catch (err) {
+          console.error('Error processing WebSocket message:', err);
         }
-      ]);
-    });
+      });
 
-    socket.addEventListener('error', () => {
-      setSnapshot((current) => current);
-    });
+      socket.addEventListener('close', () => {
+        if (isMounted) {
+          reconnectTimeout = setTimeout(connect, 2000);
+        }
+      });
+
+      socket.addEventListener('error', () => {
+        if (socket) {
+          socket.close();
+        }
+      });
+    }
+
+    connect();
 
     return () => {
-      socket.close();
+      isMounted = false;
+      if (socket) {
+        socket.close();
+      }
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
     };
   }, []);
 

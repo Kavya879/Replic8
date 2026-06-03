@@ -16,7 +16,7 @@ export default function ClusterHealthPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         {snapshot.replicas.map((replica) => (
           <StatusCard key={replica.name} title={replica.name} status={replica.status}>
-            <div>State score: {replica.score.toFixed(2)}</div>
+            <div>State score: {replica.score?.toFixed?.(2) ?? 'N/A'}</div>
             <div>CPU: {replica.metrics.cpuPercent?.toFixed(1)}%</div>
             <div>Memory: {replica.metrics.memoryPercent?.toFixed(1)}%</div>
             <div>Connections: {replica.metrics.activeConnections}</div>

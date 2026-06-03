@@ -37,7 +37,7 @@ export default function OverviewPage() {
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white/70">{replica.name}</div>
-                <div className="text-xs text-white/45">Score {replica.score.toFixed(2)}</div>
+                <div className="text-xs text-white/45">Score {replica.score?.toFixed?.(2) ?? 'N/A'}</div>
               </div>
               <StatusPill status={replica.status} />
             </div>
