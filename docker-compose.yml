@@ -37,8 +37,17 @@ services:
       REPLICA_DB_NAME: ${POSTGRES_DB:-appdb}
       REPLICA_DB_USER: ${POSTGRES_USER:-postgres}
       REPLICA_DB_PASSWORD: ${POSTGRES_PASSWORD:-change-me-primary-password}
+      MONITOR_INTERVAL_MS: "5000"
+      STALE_REPLICA_THRESHOLD_MS: "15000"
+      LATENCY_TARGET_MS: "200"
+      CPU_WEIGHT: "0.30"
+      MEMORY_WEIGHT: "0.25"
+      CONNECTION_WEIGHT: "0.20"
+      LATENCY_WEIGHT: "0.25"
     ports:
       - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       postgres-primary:
         condition: service_healthy

@@ -8,37 +8,36 @@ function isRetryableConnectionError(error) {
   );
 }
 
-function createPoolRouter(primaryPool, replicaPools) {
-  let replicaIndex = 0;
-
-  function nextReplicaPool() {
-    if (replicaPools.length === 0) {
-      return null;
-    }
-
-    const pool = replicaPools[replicaIndex % replicaPools.length];
-    replicaIndex = (replicaIndex + 1) % replicaPools.length;
-    return pool;
+function createPoolRouter(primaryPool, replicaMonitor) {
+  function orderedReplicas() {
+    return replicaMonitor.getStateSnapshot();
   }
 
   async function routeRead(sql, params) {
-    if (replicaPools.length === 0) {
+    const replicas = orderedReplicas();
+
+    if (replicas.length === 0) {
       throw new Error('No replica pools are configured.');
     }
 
-    const attempts = replicaPools.length;
+    const attempts = replicas.length;
     let lastError = null;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const pool = nextReplicaPool();
+      const replica = replicas[attempt];
+      const startedAt = Date.now();
 
       try {
+        const result = await replica.pool.query(sql, params);
+        replicaMonitor.updateQueryLatency(replica.name, Date.now() - startedAt);
+
         return {
-          poolLabel: `replica-${attempt + 1}`,
-          result: await pool.query(sql, params)
+          poolLabel: replica.name,
+          result
         };
       } catch (error) {
         lastError = error;
+        replicaMonitor.markReplicaFailed(replica.name, error.message);
         if (!isRetryableConnectionError(error)) {
           throw error;
         }

@@ -23,6 +23,7 @@ function createPools(config) {
   });
 
   const replicaPools = config.replicas.hosts.map((host, index) => createPool({
+    serviceName: host,
     host,
     port: config.replicas.port,
     database: config.replicas.database,
@@ -31,6 +32,10 @@ function createPools(config) {
     max: config.poolMax,
     connectionTimeoutMillis: config.poolConnectionTimeoutMs,
     applicationName: `query-router-replica-${index + 1}`
+  })).map((pool, index) => ({
+    name: config.replicas.hosts[index],
+    pool,
+    serviceName: config.replicas.hosts[index]
   }));
 
   return {
