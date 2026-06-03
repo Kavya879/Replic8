@@ -15,6 +15,7 @@ function getSqlFromRequest(req) {
 function createQueryController(poolRouter) {
   async function executeQuery(req, res, next) {
     try {
+      const startedAt = process.hrtime.bigint();
       const sql = getSqlFromRequest(req);
       const params = req.body && typeof req.body === 'object' && Array.isArray(req.body.params)
         ? req.body.params
@@ -23,6 +24,17 @@ function createQueryController(poolRouter) {
       const execution = classification.route === 'replica'
         ? await poolRouter.routeRead(sql, params)
         : await poolRouter.routeWrite(sql, params);
+      const elapsedSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+
+      if (poolRouter.metrics) {
+        poolRouter.metrics.queryLatencyHistogram.observe(
+          { statement_type: classification.statementType, route: classification.route, pool: execution.poolLabel },
+          elapsedSeconds
+        );
+        poolRouter.metrics.routedQueriesCounter.inc(
+          { statement_type: classification.statementType, route: classification.route, pool: execution.poolLabel }
+        );
+      }
 
       res.json({
         statementType: classification.statementType,

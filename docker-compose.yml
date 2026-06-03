@@ -59,6 +59,78 @@ services:
     networks:
       - pg-cluster
 
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - query-router
+      - node-exporter
+      - postgres-exporter-primary
+      - postgres-exporter-replica-1
+      - postgres-exporter-replica-2
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+
+  postgres-exporter-primary:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me-primary-password}@postgres-primary:5432/${POSTGRES_DB:-appdb}?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+
+  postgres-exporter-replica-1:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me-primary-password}@postgres-replica-1:5432/${POSTGRES_DB:-appdb}?sslmode=disable
+    ports:
+      - "9188:9187"
+    depends_on:
+      postgres-replica-1:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+
+  postgres-exporter-replica-2:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me-primary-password}@postgres-replica-2:5432/${POSTGRES_DB:-appdb}?sslmode=disable
+    ports:
+      - "9189:9187"
+    depends_on:
+      postgres-replica-2:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+
   postgres-replica-1:
     build:
       context: ./docker/postgres/replica
@@ -115,6 +187,7 @@ volumes:
   pg-primary-data:
   pg-replica-1-data:
   pg-replica-2-data:
+  prometheus-data:
 
 networks:
   pg-cluster:

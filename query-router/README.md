@@ -45,6 +45,7 @@ Replicas are marked stale when no fresh metrics arrive within the configured thr
 
 - `POST /query`: accepts `{ "sql": "SELECT ..." }` or plain text SQL.
 - `GET /health`: returns service status.
+- `GET /metrics`: exposes Prometheus metrics for query latency, routing counts, and replica scoring.
 
 ## Deployment
 
