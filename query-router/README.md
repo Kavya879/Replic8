@@ -1,17 +1,20 @@
-# Query Router
+# Replic8 – Distributed PostgreSQL Cluster with Intelligent Query Routing (Query Router)
 
 Query Router is a small Node.js Express service that accepts SQL over REST, classifies each statement, and sends it to the correct PostgreSQL pool.
 
-## Routing Workflow
+## Routing Workflow & Failover
 
-1. The monitor probes every replica every 5 seconds.
+1. The monitor probes every cluster node every 5 seconds.
 2. It captures CPU, memory, active connection, and query-latency data.
-3. Each replica is classified as `Healthy`, `Warning`, or `Down`.
-4. `Down` replicas are removed from the routing pool immediately.
-5. SQL requests are classified as read or write.
-6. Read queries go to the lowest-scoring available replica.
-7. Write queries go to the primary.
-8. Every status change is broadcast over WebSocket so the dashboard updates immediately.
+3. Node connection pool errors (`Unexpected error on idle client`) are caught and logged cleanly, preventing process crashes when database nodes go down.
+4. Each replica is classified as `Healthy`, `Warning`, or `Down`.
+5. `Down` replicas are removed from the read routing pool immediately.
+6. SQL requests are classified as read or write.
+7. Read queries go to the lowest-scoring active replica.
+8. Write queries go to the active primary.
+9. If the active primary goes down, the monitor evaluates the healthiest replica, runs `SELECT pg_promote(false)` to promote it to primary, and shifts all write traffic dynamically.
+10. Every status change and failover event is broadcast over WebSocket so the dashboard updates immediately.
+
 
 ## Scoring Algorithm
 

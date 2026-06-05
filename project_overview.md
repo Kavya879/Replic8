@@ -1,4 +1,4 @@
-# 📖 Project Overview: Postgres Replication Cluster & Dynamic Query Router
+# 📖 Project Overview: Replic8 – Distributed PostgreSQL Cluster with Intelligent Query Routing
 
 ## 🌟 What Is This Project?
 This project is a fully functional demonstration of a **high-availability database cluster** with **read-write splitting** and **real-time health monitoring**. 

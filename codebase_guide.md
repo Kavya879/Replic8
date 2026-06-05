@@ -1,4 +1,4 @@
-# 🗺️ Codebase Guide: File-by-File Walkthrough
+# 🗺️ Codebase Guide: Replic8 – Distributed PostgreSQL Cluster with Intelligent Query Routing
 
 Here is a simple, easy-to-read guide explaining what each file in this project does.
 
@@ -8,7 +8,7 @@ Here is a simple, easy-to-read guide explaining what each file in this project d
 
 ### 1. [docker-compose.yml](file:///c:/Users/freeb/Desktop/NewProj/docker-compose.yml)
 - **What it is**: The conductor of the project.
-- **What it does**: Defines and configures all 8 docker containers: the primary database, two replicas, the query router, the reverse proxy, Prometheus, and the Postgres exporters. It mounts volumes and networks to keep data safe and private.
+- **What it does**: Defines and configures all 7 docker containers: the primary database, two replicas, the query router, Prometheus, and the Postgres exporters. It mounts volumes and networks to keep data safe and private.
 
 ### 2. [entrypoint.sh (Primary)](file:///c:/Users/freeb/Desktop/NewProj/docker/postgres/primary/entrypoint.sh)
 - **What it does**: Runs when the Primary database container starts. It initializes the database folder, configures replication permissions in `pg_hba.conf`, and starts the database.

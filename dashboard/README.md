@@ -1,4 +1,4 @@
-# Next.js 15 Dashboard Scaffold
+# Replic8 – Distributed PostgreSQL Cluster with Intelligent Query Routing (Dashboard)
 
 This folder defines the folder structure and UI architecture for a Next.js 15 dashboard built with App Router, JavaScript/JSX, Tailwind CSS, ShadCN UI, Recharts, and a WebSocket-driven realtime layer.
 
