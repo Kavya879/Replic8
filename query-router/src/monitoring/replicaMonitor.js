@@ -36,66 +36,101 @@ function deriveStatus(metrics, config) {
   return NODE_STATUS.HEALTHY;
 }
 
-function createReplicaMonitor(replicaPools, config) {
+function createReplicaMonitor(allNodes, config) {
   const state = new Map();
   const listeners = new Set();
   let timer = null;
   let running = false;
 
-  function getReplicas() {
-    return replicaPools.map((replica) => {
-      const metrics = state.get(replica.name) || {
+  // Variables for alert tracking
+  const alerts = [];
+  function addAlert(message, type = 'info') {
+    alerts.unshift({
+      timestamp: new Date().toISOString(),
+      message,
+      type
+    });
+    if (alerts.length > 50) {
+      alerts.pop();
+    }
+    console.log(`[Alert] [${type.toUpperCase()}] ${message}`);
+  }
+
+  let primaryDownAlerted = false;
+  let lastActivePrimaryName = null;
+  const startupTime = Date.now();
+  const gracePeriodMs = 15000;
+
+  function getNodes() {
+    return allNodes.map((node) => {
+      const metrics = state.get(node.name) || {
         status: NODE_STATUS.DOWN,
         unhealthy: true,
         isStale: true,
         score: Number.POSITIVE_INFINITY,
-        failureCount: 0
+        failureCount: 0,
+        inRecovery: node.isConfiguredPrimary ? false : true,
+        role: node.isConfiguredPrimary ? 'Primary' : 'Replica'
       };
 
       return {
-        name: replica.name,
-        serviceName: replica.serviceName,
+        name: node.name,
+        serviceName: node.serviceName,
         status: metrics.status || deriveStatus(metrics, config),
+        role: metrics.role || (metrics.inRecovery ? 'Replica' : 'Primary'),
         metrics,
-        score: metrics.score ?? Number.POSITIVE_INFINITY
+        score: metrics.score ?? Number.POSITIVE_INFINITY,
+        pool: node.pool
       };
-    }).sort((left, right) => {
-      const rank = { [NODE_STATUS.HEALTHY]: 0, [NODE_STATUS.WARNING]: 1, [NODE_STATUS.DOWN]: 2 };
-      const leftRank = rank[left.status] ?? 2;
-      const rightRank = rank[right.status] ?? 2;
-
-      if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-      }
-
-      return (left.score ?? Number.POSITIVE_INFINITY) - (right.score ?? Number.POSITIVE_INFINITY);
     });
   }
 
-  function getStateSnapshot() {
-    return getReplicas();
+  function getPrimaryNode() {
+    const nodes = getNodes();
+    return nodes.find(node => node.role === 'Primary' && node.status !== NODE_STATUS.DOWN);
   }
 
   function getRoutingSnapshot() {
-    return getReplicas().filter((replica) => replica.status !== NODE_STATUS.DOWN);
+    return getNodes()
+      .filter(node => node.role === 'Replica' && node.status !== NODE_STATUS.DOWN)
+      .sort((left, right) => {
+        const rank = { [NODE_STATUS.HEALTHY]: 0, [NODE_STATUS.WARNING]: 1, [NODE_STATUS.DOWN]: 2 };
+        const leftRank = rank[left.status] ?? 2;
+        const rightRank = rank[right.status] ?? 2;
+
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+
+        return (left.score ?? Number.POSITIVE_INFINITY) - (right.score ?? Number.POSITIVE_INFINITY);
+      });
+  }
+
+  function getStateSnapshot() {
+    return getNodes().map(node => {
+      const { pool, ...rest } = node;
+      return rest;
+    });
   }
 
   function getClusterSnapshot() {
-    const replicas = getReplicas();
-    const activeReplicas = replicas.filter((replica) => replica.status !== NODE_STATUS.DOWN);
+    const replicas = getStateSnapshot();
+    const activeNodes = replicas.filter((node) => node.status !== NODE_STATUS.DOWN);
+    const activeReplicas = replicas.filter((node) => node.role === 'Replica' && node.status !== NODE_STATUS.DOWN);
 
     return {
       timestamp: new Date().toISOString(),
       replicas,
+      alerts,
       system: {
-        cpuPercent: activeReplicas.length ? activeReplicas.reduce((total, replica) => total + Number(replica.metrics.cpuPercent || 0), 0) / activeReplicas.length : 0,
-        memoryPercent: activeReplicas.length ? activeReplicas.reduce((total, replica) => total + Number(replica.metrics.memoryPercent || 0), 0) / activeReplicas.length : 0,
-        connectionCount: activeReplicas.reduce((total, replica) => total + Number(replica.metrics.activeConnections || 0), 0),
-        replicationLagMs: activeReplicas.length ? Math.max(...activeReplicas.map((replica) => Number(replica.metrics.lastProbeLatencyMs || 0))) : 0
+        cpuPercent: activeNodes.length ? activeNodes.reduce((total, node) => total + Number(node.metrics.cpuPercent || 0), 0) / activeNodes.length : 0,
+        memoryPercent: activeNodes.length ? activeNodes.reduce((total, node) => total + Number(node.metrics.memoryPercent || 0), 0) / activeNodes.length : 0,
+        connectionCount: activeNodes.reduce((total, node) => total + Number(node.metrics.activeConnections || 0), 0),
+        replicationLagMs: activeReplicas.length ? Math.max(...activeReplicas.map((node) => Number(node.metrics.lastProbeLatencyMs || 0))) : 0
       },
       queries: {
-        p50LatencyMs: activeReplicas.length ? activeReplicas.reduce((total, replica) => total + Number(replica.metrics.averageLatencyMs || 0), 0) / activeReplicas.length : 0,
-        p95LatencyMs: activeReplicas.length ? Math.max(...activeReplicas.map((replica) => Number(replica.metrics.averageLatencyMs || 0))) : 0,
+        p50LatencyMs: activeReplicas.length ? activeReplicas.reduce((total, node) => total + Number(node.metrics.averageLatencyMs || 0), 0) / activeReplicas.length : 0,
+        p95LatencyMs: activeReplicas.length ? Math.max(...activeReplicas.map((node) => Number(node.metrics.averageLatencyMs || 0))) : 0,
         requestsPerSecond: 0
       }
     };
@@ -117,26 +152,34 @@ function createReplicaMonitor(replicaPools, config) {
     return () => listeners.delete(listener);
   }
 
-  async function refreshReplica(replica) {
+  async function refreshNode(node) {
     const startedAt = Date.now();
+    let containerMetrics = { cpuPercent: 0, memoryPercent: 0 };
     try {
-      const [containerMetrics, connectionResult] = await Promise.all([
-        collectContainerMetrics(replica.serviceName),
-        replica.pool.query('SELECT count(*)::int AS active_connections FROM pg_stat_activity')
-      ]);
+      try {
+        containerMetrics = await collectContainerMetrics(node.serviceName);
+      } catch (metricsError) {
+        console.warn(`[Monitor] Failed to collect container metrics for ${node.name}: ${metricsError.message}`);
+      }
+
+      const dbInfo = await node.pool.query('SELECT (SELECT count(*)::int FROM pg_stat_activity) AS active_connections, pg_is_in_recovery() AS in_recovery');
 
       const probeStartedAt = Date.now();
-      await replica.pool.query('SELECT 1');
+      await node.pool.query('SELECT 1');
       const probeLatencyMs = Date.now() - probeStartedAt;
-      const connectionCount = Number(connectionResult?.rows?.[0]?.active_connections || 0);
-      const previous = state.get(replica.name) || {};
+
+      const connectionCount = Number(dbInfo?.rows?.[0]?.active_connections || 0);
+      const inRecovery = Boolean(dbInfo?.rows?.[0]?.in_recovery);
+
+      const previous = state.get(node.name) || {};
       const averageLatencyMs = previous.averageLatencyMs
         ? (previous.averageLatencyMs * 0.7) + (probeLatencyMs * 0.3)
         : probeLatencyMs;
+
       const metrics = {
-        containerId: containerMetrics.containerId,
-        cpuPercent: containerMetrics.cpuPercent,
-        memoryPercent: containerMetrics.memoryPercent,
+        containerId: containerMetrics.containerId || null,
+        cpuPercent: containerMetrics.cpuPercent || 0,
+        memoryPercent: containerMetrics.memoryPercent || 0,
         activeConnections: connectionCount,
         averageLatencyMs,
         isStale: false,
@@ -144,22 +187,29 @@ function createReplicaMonitor(replicaPools, config) {
         failureCount: 0,
         lastUpdatedAt: startedAt,
         lastProbeLatencyMs: probeLatencyMs,
+        inRecovery,
+        role: inRecovery ? 'Replica' : 'Primary',
         score: 0
       };
 
-      metrics.score = calculateReplicaScore(metrics, {
-        weights: config.weights,
-        latencyTargetMs: config.latencyTargetMs,
-        connectionCap: config.poolMax
-      });
+      if (inRecovery) {
+        metrics.score = calculateReplicaScore(metrics, {
+          weights: config.weights,
+          latencyTargetMs: config.latencyTargetMs,
+          connectionCap: config.poolMax
+        });
+      } else {
+        metrics.score = Number.POSITIVE_INFINITY;
+      }
 
       metrics.status = deriveStatus(metrics, config);
-
-      state.set(replica.name, metrics);
+      state.set(node.name, metrics);
     } catch (error) {
-      const previous = state.get(replica.name) || {};
-      state.set(replica.name, {
-        ...(state.get(replica.name) || {}),
+      const previous = state.get(node.name) || {};
+      const inRecovery = previous.inRecovery ?? (node.isConfiguredPrimary ? false : true);
+
+      state.set(node.name, {
+        ...previous,
         unhealthy: true,
         isStale: true,
         failureCount: Number(previous.failureCount || 0) + 1,
@@ -170,20 +220,21 @@ function createReplicaMonitor(replicaPools, config) {
         cpuPercent: 0,
         memoryPercent: 0,
         activeConnections: 0,
-        averageLatencyMs: 0
+        averageLatencyMs: 0,
+        inRecovery,
+        role: previous.role || (inRecovery ? 'Replica' : 'Primary')
       });
-      emitChange('replica-down');
     }
   }
 
   async function refreshAll() {
-    await Promise.all(replicaPools.map(refreshReplica));
+    await Promise.all(allNodes.map(refreshNode));
 
     const staleThreshold = config.staleReplicaThresholdMs;
     const now = Date.now();
 
-    for (const replica of replicaPools) {
-      const metrics = state.get(replica.name);
+    for (const node of allNodes) {
+      const metrics = state.get(node.name);
       if (!metrics) {
         continue;
       }
@@ -191,13 +242,86 @@ function createReplicaMonitor(replicaPools, config) {
       const isStale = now - metrics.lastUpdatedAt > staleThreshold;
       if (isStale) {
         metrics.isStale = true;
-        metrics.score = calculateReplicaScore(metrics, {
-          weights: config.weights,
-          latencyTargetMs: config.latencyTargetMs,
-          connectionCap: config.poolMax
-        });
+        if (metrics.inRecovery) {
+          metrics.score = calculateReplicaScore(metrics, {
+            weights: config.weights,
+            latencyTargetMs: config.latencyTargetMs,
+            connectionCap: config.poolMax
+          });
+        }
         metrics.status = deriveStatus(metrics, config);
-        state.set(replica.name, metrics);
+        state.set(node.name, metrics);
+      }
+    }
+
+    // Dynamic failover detection
+    const onlineNodes = getNodes().filter(node => node.status !== NODE_STATUS.DOWN);
+    const primaryNode = onlineNodes.find(node => node.role === 'Primary');
+
+    if (!primaryNode) {
+      // Step 1: Detect primary failure
+      if (!primaryDownAlerted) {
+        addAlert('Primary Down', 'error');
+        primaryDownAlerted = true;
+
+        const allNodesSnapshot = getNodes();
+        const formerPrimary = allNodesSnapshot.find(node => node.role === 'Primary' && node.status === NODE_STATUS.DOWN);
+        if (formerPrimary) {
+          lastActivePrimaryName = formerPrimary.name;
+        }
+      }
+
+      // Step 2: Promote healthiest replica
+      if (Date.now() - startupTime > gracePeriodMs) {
+        const onlineReplicas = onlineNodes.filter(node => node.role === 'Replica');
+        if (onlineReplicas.length > 0) {
+          onlineReplicas.sort((a, b) => {
+            const rank = { [NODE_STATUS.HEALTHY]: 0, [NODE_STATUS.WARNING]: 1 };
+            const aRank = rank[a.status] ?? 1;
+            const bRank = rank[b.status] ?? 1;
+            if (aRank !== bRank) return aRank - bRank;
+            return (a.score ?? Number.POSITIVE_INFINITY) - (b.score ?? Number.POSITIVE_INFINITY);
+          });
+
+          const replicaToPromote = onlineReplicas[0];
+          try {
+            console.log(`[Failover] Promoting healthiest replica: ${replicaToPromote.name}`);
+            await replicaToPromote.pool.query({
+              text: 'SELECT pg_promote(false)',
+              query_timeout: 30000
+            });
+
+            const displayName = replicaToPromote.name.replace('postgres-', '').replace('-', ' ');
+            const capitalizedDisplayName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
+            addAlert(`${capitalizedDisplayName} Promoted`, 'info');
+
+            const currentMetrics = state.get(replicaToPromote.name);
+            if (currentMetrics) {
+              currentMetrics.inRecovery = false;
+              currentMetrics.role = 'Primary';
+              currentMetrics.score = Number.POSITIVE_INFINITY;
+              state.set(replicaToPromote.name, currentMetrics);
+            }
+          } catch (promoteError) {
+            console.error(`[Failover] Failed to promote replica ${replicaToPromote.name}:`, promoteError);
+          }
+        } else {
+          console.error('[Failover] No online replicas available for promotion.');
+        }
+      } else {
+        console.log(`[Failover] Primary is unreachable, but holding failover promotion during startup grace period...`);
+      }
+    } else {
+      if (lastActivePrimaryName) {
+        const formerPrimaryNode = getNodes().find(node => node.name === lastActivePrimaryName);
+        if (formerPrimaryNode && formerPrimaryNode.status !== NODE_STATUS.DOWN) {
+          addAlert('Primary Restored', 'success');
+          if (formerPrimaryNode.role === 'Replica') {
+            addAlert('Rejoining Cluster As Replica', 'info');
+          }
+          lastActivePrimaryName = null;
+          primaryDownAlerted = false;
+        }
       }
     }
 
@@ -250,11 +374,15 @@ function createReplicaMonitor(replicaPools, config) {
       failureCount: 0
     };
 
-    updated.score = calculateReplicaScore(updated, {
-      weights: config.weights,
-      latencyTargetMs: config.latencyTargetMs,
-      connectionCap: config.poolMax
-    });
+    if (updated.inRecovery) {
+      updated.score = calculateReplicaScore(updated, {
+        weights: config.weights,
+        latencyTargetMs: config.latencyTargetMs,
+        connectionCap: config.poolMax
+      });
+    } else {
+      updated.score = Number.POSITIVE_INFINITY;
+    }
     updated.status = deriveStatus(updated, config);
 
     state.set(replicaName, updated);
@@ -302,11 +430,15 @@ function createReplicaMonitor(replicaPools, config) {
     };
 
     updated.status = deriveStatus(updated, config);
-    updated.score = calculateReplicaScore(updated, {
-      weights: config.weights,
-      latencyTargetMs: config.latencyTargetMs,
-      connectionCap: config.poolMax
-    });
+    if (updated.inRecovery) {
+      updated.score = calculateReplicaScore(updated, {
+        weights: config.weights,
+        latencyTargetMs: config.latencyTargetMs,
+        connectionCap: config.poolMax
+      });
+    } else {
+      updated.score = Number.POSITIVE_INFINITY;
+    }
 
     state.set(replicaName, updated);
     emitChange('replica-recovered');
@@ -322,7 +454,8 @@ function createReplicaMonitor(replicaPools, config) {
     subscribe,
     getStateSnapshot,
     getRoutingSnapshot,
-    getClusterSnapshot
+    getClusterSnapshot,
+    getPrimaryNode
   };
 }
 

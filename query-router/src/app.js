@@ -79,9 +79,11 @@ function createApp(queryController, replicaMonitor) {
       status: 'ok',
       replicas: replicaMonitor.getStateSnapshot().map((replica) => ({
         name: replica.name,
+        role: replica.role,
         score: replica.score,
         unhealthy: replica.metrics.unhealthy,
         stale: replica.metrics.isStale,
+        lastError: replica.metrics.lastError,
         cpuPercent: replica.metrics.cpuPercent,
         memoryPercent: replica.metrics.memoryPercent,
         activeConnections: replica.metrics.activeConnections,

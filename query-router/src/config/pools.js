@@ -1,7 +1,7 @@
 const { Pool } = require('pg');
 
 function createPool({ host, port, database, user, password, max, connectionTimeoutMillis, queryTimeoutMillis, applicationName }) {
-  return new Pool({
+  const pool = new Pool({
     host,
     port,
     database,
@@ -13,6 +13,13 @@ function createPool({ host, port, database, user, password, max, connectionTimeo
     idleTimeoutMillis: 30000,
     application_name: applicationName
   });
+
+  // Prevent process crash on idle client errors
+  pool.on('error', (err) => {
+    console.error(`[Pool Error] [${applicationName}] Unexpected error on idle client:`, err.message);
+  });
+
+  return pool;
 }
 
 function createPools(config) {

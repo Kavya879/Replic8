@@ -9,9 +9,25 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const config = loadConfig();
 const pools = createPools(config);
-const replicaMonitor = createReplicaMonitor(pools.replicaPools, config);
+
+const allNodes = [
+  {
+    name: 'postgres-primary',
+    serviceName: 'postgres-primary',
+    pool: pools.primaryPool,
+    isConfiguredPrimary: true
+  },
+  ...pools.replicaPools.map((r) => ({
+    name: r.name,
+    serviceName: r.serviceName,
+    pool: r.pool,
+    isConfiguredPrimary: false
+  }))
+];
+
+const replicaMonitor = createReplicaMonitor(allNodes, config);
 replicaMonitor.start();
-const poolRouter = createPoolRouter(pools.primaryPool, replicaMonitor);
+const poolRouter = createPoolRouter(replicaMonitor);
 const queryController = createQueryController(poolRouter);
 const app = createApp(queryController, replicaMonitor);
 const server = http.createServer(app);

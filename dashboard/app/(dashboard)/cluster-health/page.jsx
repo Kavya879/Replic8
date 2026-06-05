@@ -16,7 +16,14 @@ export default function ClusterHealthPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         {snapshot.replicas.map((replica) => (
           <StatusCard key={replica.name} title={replica.name} status={replica.status}>
-            <div>State score: {replica.score?.toFixed?.(2) ?? 'N/A'}</div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                replica.role === 'Primary' ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/20' : 'bg-purple-500/10 text-purple-300 border border-purple-500/20'
+              }`}>
+                {replica.role}
+              </span>
+            </div>
+            <div>State score: {replica.role === 'Replica' ? replica.score?.toFixed?.(2) ?? 'N/A' : 'N/A'}</div>
             <div>CPU: {replica.metrics.cpuPercent?.toFixed(1)}%</div>
             <div>Memory: {replica.metrics.memoryPercent?.toFixed(1)}%</div>
             <div>Connections: {replica.metrics.activeConnections}</div>

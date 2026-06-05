@@ -8,16 +8,27 @@ function isRetryableConnectionError(error) {
   );
 }
 
-function createPoolRouter(primaryPool, replicaMonitor) {
+function createPoolRouter(clusterMonitor) {
   function orderedReplicas() {
-    return replicaMonitor.getStateSnapshot().filter((replica) => replica.status !== 'Down');
+    return clusterMonitor.getRoutingSnapshot();
   }
 
   async function routeRead(sql, params) {
     const replicas = orderedReplicas();
 
     if (replicas.length === 0) {
-      throw new Error('No replica pools are configured.');
+      // Fallback to active primary if all replicas are down
+      const primaryNode = clusterMonitor.getPrimaryNode();
+      if (primaryNode) {
+        const startedAt = Date.now();
+        const result = await primaryNode.pool.query(sql, params);
+        clusterMonitor.updateQueryLatency(primaryNode.name, Date.now() - startedAt);
+        return {
+          poolLabel: primaryNode.name,
+          result
+        };
+      }
+      throw new Error('No database pools are available.');
     }
 
     const attempts = replicas.length;
@@ -29,8 +40,8 @@ function createPoolRouter(primaryPool, replicaMonitor) {
 
       try {
         const result = await replica.pool.query(sql, params);
-        replicaMonitor.updateQueryLatency(replica.name, Date.now() - startedAt);
-        replicaMonitor.markReplicaRecovered(replica.name);
+        clusterMonitor.updateQueryLatency(replica.name, Date.now() - startedAt);
+        clusterMonitor.markReplicaRecovered(replica.name);
 
         return {
           poolLabel: replica.name,
@@ -38,7 +49,7 @@ function createPoolRouter(primaryPool, replicaMonitor) {
         };
       } catch (error) {
         lastError = error;
-        replicaMonitor.markReplicaFailed(replica.name, error.message);
+        clusterMonitor.markReplicaFailed(replica.name, error.message);
         if (!isRetryableConnectionError(error)) {
           throw error;
         }
@@ -49,9 +60,13 @@ function createPoolRouter(primaryPool, replicaMonitor) {
   }
 
   async function routeWrite(sql, params) {
+    const primaryNode = clusterMonitor.getPrimaryNode();
+    if (!primaryNode) {
+      throw new Error('No active primary database available.');
+    }
     return {
-      poolLabel: 'primary',
-      result: await primaryPool.query(sql, params)
+      poolLabel: primaryNode.name,
+      result: await primaryNode.pool.query(sql, params)
     };
   }
 

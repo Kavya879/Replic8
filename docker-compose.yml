@@ -27,6 +27,8 @@ services:
   query-router:
     build:
       context: ./query-router
+    ports:
+      - "3002:3000"
     environment:
       NODE_ENV: production
       PORT: "3000"
@@ -56,25 +58,6 @@ services:
         condition: service_healthy
       postgres-replica-2:
         condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - pg-cluster
-      - public
-
-  query-router-proxy:
-    image: caddy:2.8.4-alpine
-    entrypoint:
-      - caddy
-    command:
-      - reverse-proxy
-      - --from
-      - :3002
-      - --to
-      - query-router:3000
-    ports:
-      - "3002:3002"
-    depends_on:
-      - query-router
     restart: unless-stopped
     networks:
       - pg-cluster
@@ -160,6 +143,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-appdb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-primary-password}
       PRIMARY_HOST: postgres-primary
       PRIMARY_PORT: "5432"
       REPLICATION_USER: ${REPLICATION_USER:-replicator}
@@ -188,6 +172,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-appdb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-primary-password}
       PRIMARY_HOST: postgres-primary
       PRIMARY_PORT: "5432"
       REPLICATION_USER: ${REPLICATION_USER:-replicator}
