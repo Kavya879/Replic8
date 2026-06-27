@@ -1,6 +1,6 @@
 # 🐘 Replic8 – Distributed PostgreSQL Cluster with Intelligent Query Routing
 
-A complete, production-grade local database architecture featuring **PostgreSQL 16 streaming replication**, a custom **Node.js dynamic query router**, and a real-time **Next.js monitoring dashboard**. 
+A complete, local, production-style database architecture featuring **PostgreSQL 16 streaming replication**, a custom **Node.js dynamic query router**, and a real-time **Next.js monitoring dashboard**. 
 
 This stack is pre-configured to work out of the box (including on Windows/macOS/Linux) to demonstrate automatic load-balancing, live metrics calculation, and automatic replica failover.
 
@@ -9,7 +9,7 @@ This stack is pre-configured to work out of the box (including on Windows/macOS/
 ## 🎯 The Problem It Solves (The "Why")
 
 ### 1. The Scaling Bottleneck
-In typical web applications, **read queries** (e.g., fetching user profiles, loading dashboards, generating reports) outnumber **write queries** (e.g., creating accounts, updating orders) by up to 10:1 or more. When a single database server handles both reads and writes:
+In typical web applications, **read queries** (e.g., fetching user profiles, loading dashboards, generating reports) usually outnumber **write queries** (e.g., creating accounts, updating orders) by a wide margin. When a single database server handles both reads and writes:
 - Database CPU and memory spike under heavy read load.
 - Critical write transactions get queued, slowing down or locking the entire app.
 
@@ -23,7 +23,7 @@ This project implements the industry-standard **Primary-Replica** architecture:
 *   **The Query Router (`query-router`)**: A smart proxy that intercepts SQL queries. It automatically parses the SQL:
     *   **Writes** are routed to the Primary.
     *   **Reads** are routed to the most optimal, healthy replica based on live performance metrics (CPU, Memory, Latency, Connections).
-*   **Dynamic Failover**: If a replica container crashes, the query router automatically detects this and removes it from the read pool instantly. Read queries continue serving uninterrupted from the remaining healthy replica.
+*   **Dynamic Failover**: If a replica container crashes, the query router detects it on the next health check and removes it from the read pool. Read queries continue to be served by the remaining healthy replica(s). See [query-router/BENCHMARKS.md](query-router/BENCHMARKS.md) to measure the failover window yourself.
 
 ---
 
@@ -138,7 +138,7 @@ curl -X POST http://localhost:3002/query \
 
 ---
 
-### 3. Testing Case 2: Primary Node Failover (Zero-Downtime Writes)
+### 3. Testing Case 2: Primary Node Failover (Automatic Promotion)
 To test high-availability failover when the primary node crashes:
 1. **Stop the primary container**:
    ```powershell
@@ -156,7 +156,7 @@ To test high-availability failover when the primary node crashes:
        -H "Content-Type: application/json" \
        -d '{"sql": "INSERT INTO users (name, email) VALUES ('\''Bob'\'', '\''bob@example.com'\'')"}'
      ```
-   - The write query succeeds immediately with no database connection errors, returning `poolLabel: postgres-replica-1` (or whichever replica was promoted).
+   - Once promotion completes, the write query succeeds and returns `poolLabel: postgres-replica-1` (or whichever replica was promoted). Requests issued during the brief promotion window may error and can be retried.
 
 ---
 
@@ -207,7 +207,7 @@ Replic8 includes an automated high-availability (HA) database cluster failover a
 2. **Automated Promotion**:
    - When a primary failure is detected, the Query Router ranks the online replicas using their live scoring metrics.
    - It identifies the healthiest replica and promotes it immediately to the new Primary by running `SELECT pg_promote(false);`.
-   - The router dynamically updates the write routing target, shifting all database writes to the newly promoted Primary with zero connection downtime or client-side errors.
+   - The router dynamically updates the write routing target, shifting database writes to the newly promoted Primary. In testing, writes resume once promotion completes; the [failover probe](query-router/BENCHMARKS.md) lets you measure the exact window of failing requests.
 
 3. **Dynamic Rejoining & Streaming Sync**:
    - When a database container starts up, the entrypoint scripts scan the other nodes in the cluster to see if another node has been promoted to Primary (`pg_is_in_recovery() = false`).
@@ -235,6 +235,26 @@ $$\text{Score} = w_{\text{cpu}} \cdot \frac{\text{CPU}\%}{100} + w_{\text{mem}} 
 You may notice multiple `.env.example` templates in the project:
 1. **Root `.env.example`**: Used by Docker Compose to set global database passwords and configuration.
 2. **Query Router `.env.example`**: This file is **only** needed if you are running the Node.js application standalone on your host machine (outside of Docker). When running inside Docker Compose, all configuration variables are automatically injected directly via the `environment` section of the `docker-compose.yml` file.
+
+---
+
+## 🧪 Testing & Benchmarks
+
+The query router ships with an automated test suite and a benchmark harness, both
+dependency-free (Node's built-in test runner + global `fetch`).
+
+```powershell
+cd query-router
+npm test            # run the unit test suite
+npm run bench:seed  # seed the benchmark table (stack must be running)
+npm run bench       # mixed read/write load test through the router
+npm run bench:failover  # measure the failover window while you stop a node
+```
+
+- **Unit tests** cover query classification, replica scoring, pool routing/failover,
+  and the health monitor. See [query-router/TESTING.md](query-router/TESTING.md).
+- **Benchmarks** measure throughput, latency percentiles, read distribution across
+  replicas, and observed failover time. See [query-router/BENCHMARKS.md](query-router/BENCHMARKS.md).
 
 ---
 

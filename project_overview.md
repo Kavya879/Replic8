@@ -10,12 +10,12 @@ It sets up a primary database (which accepts writes) and two replicas (which dup
 
 For engineering organizations, managing database performance, reliability, and hosting costs are constant challenges. This architecture directly addresses those concerns in the following ways:
 
-### 1. Massive Hosting Cost Optimization (Cloud Billing Reduction)
+### 1. Hosting Cost Optimization (Cloud Billing Reduction)
 In cloud environments like AWS (RDS), GCP (Cloud SQL), or Azure, running a database instance large enough to handle both heavy writes and peak read traffic is extremely expensive.
 *   **The Problem**: If you scale up a single primary database to handle massive read spikes, you pay a premium for high-write-performance storage and memory that sit idle 90% of the time.
-*   **This Solution**: Companies can run a moderately sized Primary database for writes, and pair it with several smaller, cheaper, **read-optimized replica instances**. Read replicas do not require high-performance write hardware, allowing companies to scale reads horizontally at a fraction of the cost of scaling vertically.
+*   **This Solution**: Companies can run a moderately sized Primary database for writes, and pair it with several smaller, cheaper, **read-optimized replica instances**. Read replicas do not require high-performance write hardware, allowing companies to scale reads horizontally at lower cost than scaling a single primary vertically.
 
-### 2. Guarding the User Experience (Zero-Latency Reads)
+### 2. Protecting Read Performance Under Load
 Slow page loads directly translate to lost revenue. If a marketing campaign brings a surge of users who are searching for products (heavy reads), this load can spike database CPU to 100%.
 *   **The Problem**: A single database at 100% CPU will queue write transactions. This causes users trying to check out, pay, or save their profiles to experience loading spinners or transaction timeouts.
 *   **This Solution**: By routing search and browse queries (reads) to the replica pool, the Primary database's CPU remains low and responsive. Write transactions are completed instantly, ensuring that critical business processes (e.g. checkouts, sign-ups) are never delayed by browsing traffic.
@@ -23,7 +23,7 @@ Slow page loads directly translate to lost revenue. If a marketing campaign brin
 ### 3. Business Continuity & High Availability (SLA Protection)
 Downtime is highly costly for companies, damaging customer trust and violating Service Level Agreements (SLAs).
 *   **The Problem**: If a database server experiences a hardware failure, memory leak, or disk corruption, your entire platform goes offline.
-*   **This Solution**: The dynamic health monitor checks replica status in the background. If a replica crashes, the router seamlessly redirects read traffic to the remaining healthy nodes in under 2 seconds. The end user never notices a connection failure or error page.
+*   **This Solution**: The dynamic health monitor checks replica status in the background. If a replica crashes, the router redirects read traffic to the remaining healthy nodes. Because the monitor polls on a fixed interval and queries have a short timeout, clients see only a brief window of failing reads before traffic shifts. See [query-router/BENCHMARKS.md](query-router/BENCHMARKS.md) for how to measure this window on your own machine.
 
 ### 4. Isolating Heavy Analytics & BI Tools
 Data analysts, product managers, and automated BI tools (like Tableau or Looker) often run massive, unoptimized queries to generate reports.

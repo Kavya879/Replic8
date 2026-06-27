@@ -5,7 +5,13 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node src/server.js"
+    "dev": "node src/server.js",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "bench:seed": "node benchmarks/seed.js",
+    "bench": "node benchmarks/loadtest.js",
+    "bench:failover": "node benchmarks/failover.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
