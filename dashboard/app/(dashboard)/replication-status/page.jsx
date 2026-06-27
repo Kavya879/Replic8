@@ -99,7 +99,7 @@ export default function ReplicationStatusPage() {
                   </span>
                   <h4 className="text-white font-semibold mt-2">{replica.name}</h4>
                   <p className="text-xs text-white/55 mt-1">Status: {replica.status}</p>
-                  <p className="text-xs text-white/55">Lag: {replica.metrics?.lastProbeLatencyMs?.toFixed(0) ?? 0} ms</p>
+                  <p className="text-xs text-white/55">Lag: {replica.metrics?.replicationLagMs?.toFixed(0) ?? 0} ms{typeof replica.metrics?.replicationLagBytes === 'number' ? ` · ${replica.metrics.replicationLagBytes} B` : ''}</p>
                   {replica.name === 'postgres-primary' && (
                     <div className="mt-2 text-[10px] text-amber-300/80 bg-amber-950/30 border border-amber-900/30 py-0.5 px-2 rounded animate-pulse">
                       Rejoining Cluster As Replica

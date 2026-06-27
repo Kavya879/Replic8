@@ -2,6 +2,28 @@
 
 This folder defines the folder structure and UI architecture for a Next.js 15 dashboard built with App Router, JavaScript/JSX, Tailwind CSS, ShadCN UI, Recharts, and a WebSocket-driven realtime layer.
 
+## Getting Started
+
+```powershell
+cd dashboard
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). The dashboard connects to the
+Query Router's WebSocket and updates live.
+
+### Configuration
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_METRICS_WS_URL` | `ws://localhost:3002/ws/cluster` | Query Router metrics WebSocket URL. |
+| `NEXT_PUBLIC_METRICS_TOKEN` | _(unset)_ | API key appended as `?token=` when the router runs with `API_KEY` auth enabled. |
+
+> This dashboard is the application-facing view. A separate, pre-provisioned
+> **Grafana** instance (at `http://localhost:3001`) visualizes the same Prometheus
+> metrics for an operator/SRE perspective.
+
 ## Design Direction
 
 The interface is intended to feel like an enterprise observability console similar to Datadog and Grafana:

@@ -11,7 +11,7 @@
 // BENCH_ROUTER_URL. See benchmarks/config.js for defaults.
 
 const { loadBenchConfig } = require('./config');
-const { postQuery } = require('./client');
+const { postQuery, authHeaders } = require('./client');
 const { summarize, round } = require('./stats');
 
 async function discoverIdRange(routerUrl) {
@@ -19,7 +19,7 @@ async function discoverIdRange(routerUrl) {
   try {
     response = await fetch(`${routerUrl}/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ sql: 'SELECT min(id)::int AS min, max(id)::int AS max FROM bench_items' })
     });
   } catch (error) {

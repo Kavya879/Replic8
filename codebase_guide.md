@@ -59,3 +59,27 @@ Here is a simple, easy-to-read guide explaining what each file in this project d
 
 ### 4. [page.jsx (Cluster Health)](file:///c:/Users/freeb/Desktop/NewProj/dashboard/app/(dashboard)/cluster-health/page.jsx)
 - **What it does**: Shows a grid layout of all replica nodes, their individual resource metrics, status, and computed load-balancing scores.
+
+---
+
+## 🧩 Additional Modules & Tooling
+
+### Query Router internals
+- **`src/routing/queryClassifier.js`**: Safe read/write classification. Sends locking reads (`FOR UPDATE/SHARE`) and data-modifying CTEs to the primary, classifies `EXPLAIN` by the statement it wraps, and rejects transaction-control and unknown statements rather than guessing.
+- **`src/middleware/auth.js`**: Optional API-key authentication (constant-time comparison) for `POST /query` and the metrics WebSocket. Open mode with a startup warning when no key is set.
+- **`src/monitoring/queryStats.js`**: Sliding-window tracker that produces real p50/p95/p99 query latency and requests-per-second.
+- **`src/utils/lsn.js`**: PostgreSQL LSN parsing and byte-distance math used for real replication-lag-in-bytes.
+- **`src/utils/percentile.js`**: Shared linear-interpolation percentile helper.
+
+### Tests (`query-router/tests/`)
+- Unit tests for the classifier, scorer, pool router, monitor, query stats, LSN math, and auth. Run with `npm test`. See `TESTING.md`.
+
+### Benchmarks (`query-router/benchmarks/`)
+- `seed.js`, `loadtest.js`, `failover.js` — throughput, latency percentiles, and failover-window measurement. See `BENCHMARKS.md`.
+
+### Scripts (`query-router/scripts/`)
+- `seed-data.js` — creates and seeds the demo `users` table on the primary (`npm run seed:data`).
+
+### Monitoring & CI
+- **`monitoring/grafana/`**: Provisioned Grafana datasource and the "Replic8 – Query Router Overview" dashboard.
+- **`.github/workflows/ci.yml`**: Runs unit tests, the dashboard build, and Docker image builds on every push and pull request.

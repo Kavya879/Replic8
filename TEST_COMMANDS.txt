@@ -1,0 +1,317 @@
+==============================================================================
+ Replic8 - PowerShell Test Playbook
+==============================================================================
+A copy-paste guide for running and testing every scenario of the project on
+Windows PowerShell. Run all commands from the project root unless a command
+shows a different folder.
+
+Project root:  C:\Users\freeb\Desktop\Personal Projects\Replic8
+
+------------------------------------------------------------------------------
+ NOTES ON HTTP CALLS IN POWERSHELL
+------------------------------------------------------------------------------
+* Use "curl.exe" (with the .exe) so PowerShell does NOT substitute its
+  Invoke-WebRequest alias. curl.exe ships with Windows 10/11.
+* JSON bodies are escaped with \" inside a double-quoted string.
+* A native PowerShell alternative is Invoke-RestMethod, e.g.:
+
+    $body = '{"sql":"SELECT * FROM users"}'
+    Invoke-RestMethod -Uri http://localhost:3002/query -Method Post -ContentType 'application/json' -Body $body
+
+  (Invoke-RestMethod throws on HTTP 4xx/5xx; wrap error cases in try/catch and
+   read $_.ErrorDetails.Message to see the error body.)
+
+==============================================================================
+ 0. PREREQUISITES
+==============================================================================
+# Docker Desktop must be running (Settings > enable "Expose daemon"/socket).
+docker --version
+docker compose version
+node --version          # should be v18+ (v22 recommended)
+
+
+==============================================================================
+ 1. FIRST-TIME SETUP
+==============================================================================
+# Create your environment file (only the first time)
+copy .env.example .env
+
+# (Optional) open it to set passwords / API_KEY / Grafana creds
+notepad .env
+
+# Build and start the whole stack in the background
+docker compose up -d --build
+
+
+==============================================================================
+ 2. VERIFY THE CLUSTER IS HEALTHY
+==============================================================================
+# All containers should eventually show "running" / "healthy"
+docker compose ps
+
+# Watch a specific container come up
+docker compose logs -f postgres-primary
+docker compose logs -f query-router
+# (press Ctrl+C to stop following logs)
+
+# Router health endpoint (lists every node, role, score, lag)
+curl.exe http://localhost:3002/health
+
+# Prometheus-format metrics
+curl.exe http://localhost:3002/metrics
+
+
+==============================================================================
+ 3. SEED DEMO DATA (creates the `users` table)
+==============================================================================
+cd query-router
+npm install
+npm run seed:data
+cd ..
+
+# If you see "password authentication failed", your .env password is read
+# automatically; make sure POSTGRES_PASSWORD in .env matches the running DB.
+# To override just for this run:
+#   $env:BENCH_DB_PASSWORD="your-password"; npm run seed:data
+
+
+==============================================================================
+ 4. RUN THE DASHBOARD (separate terminal)
+==============================================================================
+cd dashboard
+npm install
+npm run dev
+# Open http://localhost:3000
+# Leave this terminal running; use a NEW terminal for the tests below.
+
+
+==============================================================================
+ 5. BASIC READ / WRITE ROUTING
+==============================================================================
+# WRITE -> goes to the primary
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"INSERT INTO users (name, email) VALUES ('Grace','grace@example.com')\"}"
+
+# READ -> goes to the best replica (look at the "pool" field in the response)
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"SELECT * FROM users\"}"
+
+
+==============================================================================
+ 6. CONFIRM READS ARE LOAD-BALANCED ACROSS REPLICAS
+==============================================================================
+# Fire 20 reads and print which pool served each one.
+1..20 | ForEach-Object {
+  (Invoke-RestMethod -Uri http://localhost:3002/query -Method Post -ContentType 'application/json' -Body '{"sql":"SELECT 1"}').pool
+}
+# Expect a mix of postgres-replica-1 and postgres-replica-2.
+
+
+==============================================================================
+ 7. QUERY CLASSIFICATION (safe routing) TESTS
+==============================================================================
+# 7a. Locking read -> routed to PRIMARY (still a READ, but needs a write session)
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"SELECT * FROM users WHERE id = 1 FOR UPDATE\"}"
+
+# 7b. Read-only CTE -> routed to a REPLICA
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"WITH x AS (SELECT id FROM users) SELECT count(*) FROM x\"}"
+
+# 7c. Data-modifying CTE -> routed to PRIMARY
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"WITH d AS (DELETE FROM users WHERE id = -1 RETURNING *) SELECT count(*) FROM d\"}"
+
+# 7d. Transaction control -> REJECTED with a clear error
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"BEGIN\"}"
+
+# 7e. Unknown statement -> REJECTED ("Unsupported SQL statement type")
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"FOOBAR something\"}"
+
+
+==============================================================================
+ 8. PRIMARY FAILOVER (automatic promotion)
+==============================================================================
+# Stop the primary to simulate a crash
+docker compose stop postgres-primary
+
+# Watch the router promote the healthiest replica
+docker compose logs -f query-router
+# Look for: "Primary Down" then "... Promoted". (Ctrl+C to stop following.)
+# The dashboard Activity Log shows the same events live.
+
+# After promotion, a WRITE should succeed again (served by the promoted node)
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"INSERT INTO users (name, email) VALUES ('Heidi','heidi@example.com')\"}"
+
+# Check the new topology
+curl.exe http://localhost:3002/health
+
+
+==============================================================================
+ 9. OLD PRIMARY RESTORATION (rejoins as a standby)
+==============================================================================
+docker compose start postgres-primary
+
+# Watch it discover the new primary, re-clone, and stream as a replica
+docker compose logs -f postgres-primary
+# Dashboard logs: "Primary Restored" then "Rejoining Cluster As Replica".
+
+
+==============================================================================
+ 10. REPLICA FAILOVER (reads keep flowing)
+==============================================================================
+# Stop one replica
+docker compose stop postgres-replica-2
+
+# Reads should now all be served by the remaining healthy replica/primary
+1..10 | ForEach-Object {
+  (Invoke-RestMethod -Uri http://localhost:3002/query -Method Post -ContentType 'application/json' -Body '{"sql":"SELECT 1"}').pool
+}
+
+# Bring it back; it auto-rejoins and becomes Healthy again
+docker compose start postgres-replica-2
+
+
+==============================================================================
+ 11. ROUTER RESTART / DASHBOARD RECONNECTION
+==============================================================================
+docker compose restart query-router
+# The dashboard WebSocket drops and auto-reconnects every 2s with no refresh.
+
+
+==============================================================================
+ 12. MEASURED FAILOVER WINDOW (probe while you kill a node)
+==============================================================================
+# Terminal A: start the probe (sends a read every 100ms for 60s)
+cd query-router
+npm run bench:failover
+
+# Terminal B: take a node down while the probe runs
+docker compose stop postgres-replica-2     # replica failover
+#   - or -
+docker compose stop postgres-primary       # primary failover + promotion
+
+# The probe prints when reads start failing and when they recover.
+
+
+==============================================================================
+ 13. API-KEY AUTHENTICATION
+==============================================================================
+# Enable auth: set a key in .env, then recreate the router container.
+#   In .env set:  API_KEY=supersecret
+docker compose up -d --build query-router
+
+# Without a key -> 401 Unauthorized
+curl.exe -i -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"SELECT 1\"}"
+
+# With the key -> success
+curl.exe -X POST http://localhost:3002/query -H "Content-Type: application/json" -H "X-API-Key: supersecret" -d "{\"sql\": \"SELECT 1\"}"
+
+# For the dashboard WebSocket when auth is on, start it with the token:
+#   cd dashboard
+#   $env:NEXT_PUBLIC_METRICS_TOKEN="supersecret"; npm run dev
+
+# To turn auth back off: clear API_KEY in .env, then:
+#   docker compose up -d --build query-router
+
+
+==============================================================================
+ 14. UNIT TESTS
+==============================================================================
+cd query-router
+npm test                 # run all 75 tests once
+npm run test:watch       # re-run on file changes
+npm run test:coverage    # with a coverage summary
+node --test tests/queryClassifier.test.js   # a single file
+cd ..
+
+
+==============================================================================
+ 15. BENCHMARKS (throughput + latency)
+==============================================================================
+cd query-router
+npm run bench:seed       # seed the bench_items table (1000 rows)
+npm run bench            # 15s mixed load test (90% reads / 10% writes)
+
+# Tune the run (PowerShell sets env vars with $env:)
+$env:BENCH_DURATION=30; $env:BENCH_CONCURRENCY=50; $env:BENCH_READ_RATIO=0.8; npm run bench
+
+# Compare horizontal read scaling: 1 replica vs 2
+docker compose stop postgres-replica-2
+npm run bench                                   # note throughput with 1 replica
+docker compose start postgres-replica-2
+# wait until it is Healthy on the dashboard, then:
+npm run bench                                   # compare with 2 replicas
+cd ..
+
+
+==============================================================================
+ 16. GRAFANA & PROMETHEUS
+==============================================================================
+# Grafana dashboards:   http://localhost:3001   (login admin / admin)
+#   -> open "Replic8 - Query Router Overview"
+# Prometheus UI:        http://localhost:9090
+# Prometheus targets (all should be UP except the optional node-exporter):
+#   http://localhost:9090/targets
+# Generate traffic first (section 15) so the panels have data.
+
+
+==============================================================================
+ 17. INSPECTING THE DATABASES DIRECTLY
+==============================================================================
+# Replace "root" below with your POSTGRES_PASSWORD from .env.
+
+# Open a psql shell inside the primary container
+docker compose exec -e PGPASSWORD=root postgres-primary psql -U postgres -d appdb
+
+# Run a one-off query on the primary
+docker compose exec -e PGPASSWORD=root postgres-primary psql -U postgres -d appdb -c "SELECT count(*) FROM users;"
+
+# Check recovery state (true = standby/replica, false = primary)
+docker compose exec -e PGPASSWORD=root postgres-replica-1 psql -U postgres -d appdb -c "SELECT pg_is_in_recovery();"
+
+# Check real replication lag (time) on a replica
+docker compose exec -e PGPASSWORD=root postgres-replica-1 psql -U postgres -d appdb -c "SELECT now() - pg_last_xact_replay_timestamp() AS replay_lag;"
+
+# From the host with a local psql client (if installed)
+#   psql "postgresql://postgres:root@127.0.0.1:15432/appdb"   # primary
+#   psql "postgresql://postgres:root@127.0.0.1:15433/appdb"   # replica 1
+#   psql "postgresql://postgres:root@127.0.0.1:15434/appdb"   # replica 2
+
+
+==============================================================================
+ 18. LOGS & DEBUGGING
+==============================================================================
+docker compose ps                       # status of every container
+docker compose logs query-router        # router logs
+docker compose logs --tail=100 -f query-router
+docker compose logs postgres-replica-1
+docker stats                            # live CPU/memory of all containers
+
+
+==============================================================================
+ 19. RESET / TEARDOWN
+==============================================================================
+# Stop containers but keep data volumes
+docker compose down
+
+# Stop AND delete all data (fresh start next time)
+docker compose down -v
+
+# Rebuild from scratch
+docker compose down -v
+docker compose up -d --build
+
+# Stop just one service
+docker compose stop query-router
+
+# Restart one service
+docker compose restart query-router
+
+
+==============================================================================
+ QUICK REFERENCE - URLs & PORTS
+==============================================================================
+Dashboard (Next.js)   http://localhost:3000
+Query Router API      http://localhost:3002   (POST /query, GET /health, GET /metrics)
+Grafana               http://localhost:3001   (admin / admin)
+Prometheus            http://localhost:9090
+Postgres primary      127.0.0.1:15432
+Postgres replica 1    127.0.0.1:15433
+Postgres replica 2    127.0.0.1:15434
+==============================================================================

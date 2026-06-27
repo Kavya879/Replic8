@@ -1,11 +1,32 @@
 const { collectContainerMetrics, promoteContainer } = require('./dockerMetrics');
 const { calculateReplicaScore } = require('../routing/replicaScorer');
+const { createQueryStatsTracker } = require('./queryStats');
+const { lsnDiffBytes } = require('../utils/lsn');
 
 const NODE_STATUS = {
   HEALTHY: 'Healthy',
   WARNING: 'Warning',
   DOWN: 'Down'
 };
+
+// Probes each node for connection count, recovery state, and (on replicas) the
+// true replication lag. The lag is 0 when the standby has applied everything it
+// has received; otherwise it is the wall-clock delay of the last replayed
+// transaction. This is the standard PostgreSQL replication-lag query.
+const NODE_PROBE_SQL = `
+  SELECT
+    (SELECT count(*)::int FROM pg_stat_activity) AS active_connections,
+    pg_is_in_recovery() AS in_recovery,
+    CASE WHEN pg_is_in_recovery()
+         THEN pg_last_wal_replay_lsn()::text
+         ELSE pg_current_wal_lsn()::text
+    END AS wal_lsn,
+    CASE
+      WHEN NOT pg_is_in_recovery() THEN 0
+      WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0
+      ELSE COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())), 0)
+    END AS replay_lag_seconds
+`;
 
 function deriveStatus(metrics, config) {
   if (!metrics || metrics.status === NODE_STATUS.DOWN || metrics.unhealthy) {
@@ -39,8 +60,20 @@ function deriveStatus(metrics, config) {
 function createReplicaMonitor(allNodes, config) {
   const state = new Map();
   const listeners = new Set();
+  const queryStats = createQueryStatsTracker({ windowMs: 60000, rpsWindowMs: 5000 });
   let timer = null;
   let running = false;
+
+  // Routed-query latency stats (real p50/p95/p99 + requests-per-second) are
+  // delegated to the sliding-window tracker. poolRouter calls recordQuery() for
+  // every successful query so these reflect live traffic, not background probes.
+  function recordQuery(latencyMs) {
+    queryStats.record(latencyMs);
+  }
+
+  function getQueryStats() {
+    return queryStats.snapshot();
+  }
 
   // Variables for alert tracking
   const alerts = [];
@@ -126,13 +159,13 @@ function createReplicaMonitor(allNodes, config) {
         cpuPercent: activeNodes.length ? activeNodes.reduce((total, node) => total + Number(node.metrics.cpuPercent || 0), 0) / activeNodes.length : 0,
         memoryPercent: activeNodes.length ? activeNodes.reduce((total, node) => total + Number(node.metrics.memoryPercent || 0), 0) / activeNodes.length : 0,
         connectionCount: activeNodes.reduce((total, node) => total + Number(node.metrics.activeConnections || 0), 0),
-        replicationLagMs: activeReplicas.length ? Math.max(...activeReplicas.map((node) => Number(node.metrics.lastProbeLatencyMs || 0))) : 0
+        // Worst-case replication lag across healthy replicas (time behind, in ms,
+        // and bytes behind the primary's current WAL position).
+        replicationLagMs: activeReplicas.length ? Math.max(...activeReplicas.map((node) => Number(node.metrics.replicationLagMs || 0))) : 0,
+        replicationLagBytes: activeReplicas.length ? Math.max(...activeReplicas.map((node) => Number(node.metrics.replicationLagBytes || 0))) : 0
       },
-      queries: {
-        p50LatencyMs: activeReplicas.length ? activeReplicas.reduce((total, node) => total + Number(node.metrics.averageLatencyMs || 0), 0) / activeReplicas.length : 0,
-        p95LatencyMs: activeReplicas.length ? Math.max(...activeReplicas.map((node) => Number(node.metrics.averageLatencyMs || 0))) : 0,
-        requestsPerSecond: 0
-      }
+      // Real latency percentiles and throughput derived from routed-query history.
+      queries: getQueryStats()
     };
   }
 
@@ -162,14 +195,17 @@ function createReplicaMonitor(allNodes, config) {
         console.warn(`[Monitor] Failed to collect container metrics for ${node.name}: ${metricsError.message}`);
       }
 
-      const dbInfo = await node.pool.query('SELECT (SELECT count(*)::int FROM pg_stat_activity) AS active_connections, pg_is_in_recovery() AS in_recovery');
+      const dbInfo = await node.pool.query(NODE_PROBE_SQL);
 
       const probeStartedAt = Date.now();
       await node.pool.query('SELECT 1');
       const probeLatencyMs = Date.now() - probeStartedAt;
 
-      const connectionCount = Number(dbInfo?.rows?.[0]?.active_connections || 0);
-      const inRecovery = Boolean(dbInfo?.rows?.[0]?.in_recovery);
+      const row = dbInfo?.rows?.[0] || {};
+      const connectionCount = Number(row.active_connections || 0);
+      const inRecovery = Boolean(row.in_recovery);
+      const replicationLagSeconds = inRecovery ? Math.max(Number(row.replay_lag_seconds || 0), 0) : 0;
+      const walLsn = row.wal_lsn || null;
 
       const previous = state.get(node.name) || {};
       const averageLatencyMs = previous.averageLatencyMs
@@ -187,6 +223,14 @@ function createReplicaMonitor(allNodes, config) {
         failureCount: 0,
         lastUpdatedAt: startedAt,
         lastProbeLatencyMs: probeLatencyMs,
+        // Real WAL replication telemetry. walLsn is the current write position on
+        // the primary and the last replayed position on a replica. The byte lag
+        // (replicationLagBytes) is filled in by refreshAll once the primary's LSN
+        // is known across all nodes.
+        walLsn,
+        replicationLagSeconds,
+        replicationLagMs: replicationLagSeconds * 1000,
+        replicationLagBytes: previous.replicationLagBytes || 0,
         inRecovery,
         role: inRecovery ? 'Replica' : 'Primary',
         score: 0
@@ -221,6 +265,9 @@ function createReplicaMonitor(allNodes, config) {
         memoryPercent: 0,
         activeConnections: 0,
         averageLatencyMs: 0,
+        replicationLagMs: 0,
+        replicationLagSeconds: 0,
+        replicationLagBytes: 0,
         inRecovery,
         role: previous.role || (inRecovery ? 'Replica' : 'Primary')
       });
@@ -251,6 +298,26 @@ function createReplicaMonitor(allNodes, config) {
         }
         metrics.status = deriveStatus(metrics, config);
         state.set(node.name, metrics);
+      }
+    }
+
+    // Compute real byte-level replication lag for each replica by comparing its
+    // last replayed WAL position against the active primary's current WAL LSN.
+    const primaryMetrics = allNodes
+      .map((node) => state.get(node.name))
+      .find((metrics) => metrics && !metrics.inRecovery && metrics.status !== NODE_STATUS.DOWN && metrics.walLsn);
+    const primaryWalLsn = primaryMetrics ? primaryMetrics.walLsn : null;
+
+    if (primaryWalLsn) {
+      for (const node of allNodes) {
+        const metrics = state.get(node.name);
+        if (metrics && metrics.inRecovery && metrics.walLsn) {
+          const lagBytes = lsnDiffBytes(primaryWalLsn, metrics.walLsn);
+          if (lagBytes !== null) {
+            metrics.replicationLagBytes = lagBytes;
+            state.set(node.name, metrics);
+          }
+        }
       }
     }
 
@@ -449,6 +516,7 @@ function createReplicaMonitor(allNodes, config) {
     stop,
     refreshAll,
     updateQueryLatency,
+    recordQuery,
     markReplicaFailed,
     markReplicaRecovered,
     subscribe,

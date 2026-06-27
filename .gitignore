@@ -12,6 +12,7 @@ yarn-error.log*
 # Build and coverage output
 dist/
 build/
+.next/
 coverage/
 
 # Logs

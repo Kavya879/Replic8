@@ -1,4 +1,4 @@
-// File: C:\Users\freeb\Desktop\NewProj\dashboard\app\(dashboard)\overview\page.jsx
+// File: C:\Users\freeb\Desktop\Personal Projects\Replic8\dashboard\app\(dashboard)\overview\page.jsx
 import * as entry from '../../../../../app/(dashboard)/overview/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

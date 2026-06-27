@@ -1,6 +1,7 @@
 const express = require('express');
 const client = require('prom-client');
 const { createQueryRoutes } = require('./routes/queryRoutes');
+const { createApiKeyAuth } = require('./middleware/auth');
 const { errorHandler } = require('./middleware/errorHandler');
 
 const registry = new client.Registry();
@@ -68,7 +69,7 @@ function updateReplicaMetrics(replicaMonitor) {
   }
 }
 
-function createApp(queryController, replicaMonitor) {
+function createApp(queryController, replicaMonitor, config = {}) {
   const app = express();
 
   app.use(express.json({ limit: '1mb' }));
@@ -107,7 +108,7 @@ function createApp(queryController, replicaMonitor) {
     routedQueriesCounter
   };
 
-  app.use(createQueryRoutes(queryController));
+  app.use(createQueryRoutes(queryController, createApiKeyAuth(config.apiKey)));
   app.use(errorHandler);
 
   return app;

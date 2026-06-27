@@ -3,13 +3,20 @@
 
 const { performance } = require('node:perf_hooks');
 
+const API_KEY = (process.env.BENCH_API_KEY || process.env.API_KEY || '').trim();
+
+// Auth header for the router when an API key is configured (no-op otherwise).
+function authHeaders() {
+  return API_KEY ? { 'X-API-Key': API_KEY } : {};
+}
+
 async function postQuery(routerUrl, sql, params = []) {
   const startedAt = performance.now();
 
   try {
     const response = await fetch(`${routerUrl}/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ sql, params })
     });
 
@@ -29,5 +36,6 @@ async function postQuery(routerUrl, sql, params = []) {
 }
 
 module.exports = {
-  postQuery
+  postQuery,
+  authHeaders
 };

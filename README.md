@@ -6,6 +6,20 @@ This stack is pre-configured to work out of the box (including on Windows/macOS/
 
 ---
 
+## ✨ Engineering Highlights
+
+- **Safe read/write routing.** SQL is classified before routing: plain reads go to replicas; writes, locking reads (`SELECT ... FOR UPDATE`), and data-modifying CTEs go to the primary; transaction-control and unknown statements are rejected rather than mis-routed.
+- **Weighted, health-aware load balancing.** Each replica gets a live score from CPU, memory, connections, and latency; reads go to the lowest-scoring healthy node.
+- **Automatic failover & self-healing.** A crashed primary triggers `pg_promote` on the healthiest replica; a recovered node rejoins as a standby via `pg_basebackup`.
+- **Real observability metrics.** True WAL replication lag (time **and** bytes), real query-latency percentiles (p50/p95/p99), and requests-per-second — not placeholders.
+- **Optional API-key authentication** on the SQL endpoint and metrics WebSocket (constant-time comparison).
+- **Automated quality gates.** 75 dependency-free unit tests, a load/failover benchmark harness, and a GitHub Actions CI pipeline.
+- **Operational hygiene.** Graceful shutdown, bounded connection pools with fast-fail timeouts, and provisioned Grafana dashboards.
+
+> 📋 A complete, copy-paste **PowerShell test playbook** for every scenario (failover, recovery, replica loss, auth, benchmarks, etc.) lives in [`TEST_COMMANDS.txt`](TEST_COMMANDS.txt).
+
+---
+
 ## 🎯 The Problem It Solves (The "Why")
 
 ### 1. The Scaling Bottleneck
@@ -49,8 +63,9 @@ graph TD
 
 *   **Databases**: PostgreSQL 16 (configured for WAL replication).
 *   **Query Router**: Node.js, Express, `pg` (node-postgres), `ws` (WebSockets), `prom-client` (Prometheus metrics).
-*   **Monitoring**: Prometheus (scraping router metrics + `postgres-exporter` container instances).
-*   **Dashboard**: Next.js, React, TailwindCSS, Chart.js.
+*   **Monitoring**: Prometheus (scraping router metrics + `postgres-exporter` container instances), with Grafana dashboards provisioned on top.
+*   **Dashboard**: Next.js 15, React 19, TailwindCSS, Recharts.
+*   **Quality**: Node.js built-in test runner (unit tests), a custom benchmark harness, and GitHub Actions CI.
 
 ---
 
@@ -84,7 +99,23 @@ Verify everything is running correctly:
 ```powershell
 docker compose ps
 ```
-*Expected output: All 7 containers (`postgres-primary`, `postgres-replica-1`, `postgres-replica-2`, `query-router`, `prometheus`, and exporters) are status `running (healthy)`.*
+*Expected output: All containers (`postgres-primary`, `postgres-replica-1`, `postgres-replica-2`, `query-router`, `prometheus`, `grafana`, and exporters) are status `running (healthy)`.*
+
+---
+
+### Step 2b: Seed Demo Data (optional but recommended)
+Create and populate a sample `users` table on the primary so the example queries below work right away:
+```powershell
+cd query-router
+npm install
+npm run seed:data
+cd ..
+```
+
+### Monitoring with Grafana
+Prometheus scrapes the router and exporters, and Grafana is pre-provisioned with a "Replic8 – Query Router Overview" dashboard (throughput, latency percentiles, replica scores, CPU/memory/connections).
+- Grafana: [http://localhost:3001](http://localhost:3001) (default login `admin` / `admin`, override with `GRAFANA_USER` / `GRAFANA_PASSWORD`)
+- Prometheus: [http://localhost:9090](http://localhost:9090)
 
 ---
 
@@ -121,20 +152,16 @@ If you use a GUI like **pgAdmin** or **DBeaver**, you can connect to the nodes i
 The Query Router listens at `http://localhost:3002/query`. You can send SQL queries via POST requests.
 
 #### A. Execute a Write (Routes to Primary)
-```bash
-curl -X POST http://localhost:3002/query \
-  -H "Content-Type: application/json" \
-  -d '{"sql": "INSERT INTO users (name, email) VALUES ('\''Alice'\'', '\''alice@example.com'\'')"}'
+```powershell
+curl -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"INSERT INTO users (name, email) VALUES ('Alice','alice@example.com')\"}"
 ```
-*Response will show `poolLabel: postgres-primary` (or the currently promoted Primary node).*
+*Response will show `pool: postgres-primary` (or the currently promoted Primary node).*
 
 #### B. Execute a Read (Routes to best Replica)
-```bash
-curl -X POST http://localhost:3002/query \
-  -H "Content-Type: application/json" \
-  -d '{"sql": "SELECT * FROM users"}'
+```powershell
+curl -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"SELECT * FROM users\"}"
 ```
-*Response will show `poolLabel: postgres-replica-1` or `postgres-replica-2` depending on which one currently has the lower load score.*
+*Response will show `pool: postgres-replica-1` or `postgres-replica-2` depending on which one currently has the lower load score.*
 
 ---
 
@@ -151,12 +178,10 @@ To test high-availability failover when the primary node crashes:
    - The promoted replica's badge shifts to **Primary (Writes Active)**.
 3. **Verify Write Routing**:
    - Send another write query:
-     ```bash
-     curl -X POST http://localhost:3002/query \
-       -H "Content-Type: application/json" \
-       -d '{"sql": "INSERT INTO users (name, email) VALUES ('\''Bob'\'', '\''bob@example.com'\'')"}'
+     ```powershell
+     curl -X POST http://localhost:3002/query -H "Content-Type: application/json" -d "{\"sql\": \"INSERT INTO users (name, email) VALUES ('Bob','bob@example.com')\"}"
      ```
-   - Once promotion completes, the write query succeeds and returns `poolLabel: postgres-replica-1` (or whichever replica was promoted). Requests issued during the brief promotion window may error and can be retried.
+   - Once promotion completes, the write query succeeds and returns `pool: postgres-replica-1` (or whichever replica was promoted). Requests issued during the brief promotion window may error and can be retried.
 
 ---
 
@@ -236,6 +261,18 @@ You may notice multiple `.env.example` templates in the project:
 1. **Root `.env.example`**: Used by Docker Compose to set global database passwords and configuration.
 2. **Query Router `.env.example`**: This file is **only** needed if you are running the Node.js application standalone on your host machine (outside of Docker). When running inside Docker Compose, all configuration variables are automatically injected directly via the `environment` section of the `docker-compose.yml` file.
 
+Key variables (set in the root `.env`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `postgres` / `change-me...` / `appdb` | Database credentials and name. |
+| `REPLICATION_USER` / `REPLICATION_PASSWORD` | `replicator` / `change-me...` | Streaming-replication credentials. |
+| `API_KEY` | _(empty)_ | When set, requires this key on `POST /query` and the metrics WebSocket. Empty = open mode + startup warning. |
+| `GRAFANA_USER` / `GRAFANA_PASSWORD` | `admin` / `admin` | Grafana login. |
+| `CPU_WEIGHT` / `MEMORY_WEIGHT` / `CONNECTION_WEIGHT` / `LATENCY_WEIGHT` | `0.30` / `0.25` / `0.20` / `0.25` | Load-score weights (set on the router service in `docker-compose.yml`). |
+
+> The host-run helper scripts (`npm run seed:data`, `npm run bench:*`) automatically read the root `.env`, so they use the same database credentials as the cluster. Override individually with `BENCH_*` variables if needed (see [query-router/BENCHMARKS.md](query-router/BENCHMARKS.md)).
+
 ---
 
 ## 🧪 Testing & Benchmarks
@@ -245,16 +282,80 @@ dependency-free (Node's built-in test runner + global `fetch`).
 
 ```powershell
 cd query-router
-npm test            # run the unit test suite
-npm run bench:seed  # seed the benchmark table (stack must be running)
-npm run bench       # mixed read/write load test through the router
+npm install
+npm test                # run the unit test suite (75 tests)
+npm run seed:data       # create + seed the demo `users` table (stack must be running)
+npm run bench:seed      # seed the benchmark table
+npm run bench           # mixed read/write load test through the router
 npm run bench:failover  # measure the failover window while you stop a node
 ```
 
 - **Unit tests** cover query classification, replica scoring, pool routing/failover,
-  and the health monitor. See [query-router/TESTING.md](query-router/TESTING.md).
+  the health monitor, query-latency stats, LSN math, and API-key auth. See [query-router/TESTING.md](query-router/TESTING.md).
 - **Benchmarks** measure throughput, latency percentiles, read distribution across
   replicas, and observed failover time. See [query-router/BENCHMARKS.md](query-router/BENCHMARKS.md).
+- **Full scenario playbook** (PowerShell, copy-paste): see [`TEST_COMMANDS.txt`](TEST_COMMANDS.txt).
+
+---
+
+## 🔐 Security
+
+This is a local demonstration stack, and a few boundaries are deliberately left
+open for ease of setup. They are called out here so the trade-offs are explicit.
+
+- **Query API authentication (optional, off by default).** The Query Router's
+  `POST /query` endpoint executes arbitrary SQL. Set an `API_KEY` in `.env` to
+  require a key on every request; leave it empty to run open. When no key is set,
+  the router logs a startup warning. Requests authenticate with either header:
+  ```powershell
+  curl -X POST http://localhost:3002/query -H "X-API-Key: $env:API_KEY" -H "Content-Type: application/json" -d "{\"sql\": \"SELECT 1\"}"
+  # or:  -H "Authorization: Bearer $env:API_KEY"
+  ```
+- **Metrics WebSocket.** When `API_KEY` is set, the dashboard WebSocket
+  (`/ws/cluster`) also requires the key as a query parameter (`?token=<key>`).
+  Point the dashboard at it with `NEXT_PUBLIC_METRICS_TOKEN=<key>` (and optionally
+  `NEXT_PUBLIC_METRICS_WS_URL`).
+- **`/health` and `/metrics` stay open** so Prometheus can scrape the router on
+  the internal Docker network. In a real deployment these would sit behind the
+  network boundary or a scrape credential.
+- **Database ports** (`15432`–`15434`) are published only on `127.0.0.1`, and the
+  `pg-cluster` network is marked `internal`, so the databases are not reachable
+  from outside the host.
+- **Known gaps for a production deployment:** TLS termination in front of the
+  router, per-client credentials/rate limiting instead of a single shared key, and
+  authenticated `/metrics` scraping. These are intentionally out of scope for a
+  local demo.
+
+---
+
+## ✅ Continuous Integration
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and pull
+request with three jobs:
+
+- **Query Router unit tests** — `npm ci` + `npm test` on Node 22.
+- **Dashboard build** — `npm ci` + `next build` to catch UI build breakage.
+- **Docker images** — `docker compose build` to validate every Dockerfile.
+
+To show build status in this README, add the badge (replace `OWNER/REPO`):
+
+```markdown
+![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+```
+
+---
+
+## 🛠️ Operational Notes
+
+- **Graceful shutdown.** On `SIGTERM` (from `docker stop`) or `SIGINT` (Ctrl+C),
+  the router stops the monitor loop, closes WebSocket clients, stops accepting new
+  HTTP connections, and drains the PostgreSQL pools before exiting (with a 10s
+  forced-exit safety net).
+- **Connection pooling.** Each pool is bounded by `POOL_MAX` (default 10) with a
+  `POOL_CONNECTION_TIMEOUT_MS` acquire timeout and a 2s `query_timeout`, so a slow
+  or saturated node fails fast and is rerouted rather than hanging the service.
+- **Demo data.** `npm run seed:data` (in `query-router/`) creates and seeds the
+  `users` table used by the examples above.
 
 ---
 
@@ -266,3 +367,5 @@ npm run bench:failover  # measure the failover window while you stop a node
     Check replica logs with `docker compose logs -f postgres-replica-1` to verify replication credentials match the primary `.env`.
 *   **Docker Socket Permissions**:
     The router queries `/var/run/docker.sock` to fetch CPU/Memory stats. Ensure your Docker Desktop has socket sharing enabled.
+*   **Grafana dashboard is empty**:
+    Open [http://localhost:9090/targets](http://localhost:9090/targets) and confirm the `query-router` target is `UP`. The dashboard only renders data once the router has served some queries (run `npm run bench` or send a few requests).

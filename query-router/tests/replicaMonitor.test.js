@@ -27,7 +27,7 @@ const config = {
 
 // Builds a fake cluster node backed by a pool that answers the two queries the
 // monitor issues during refreshNode: the activity/recovery probe and `SELECT 1`.
-function makeNode(name, { inRecovery = true, activeConnections = 2, fail = false } = {}) {
+function makeNode(name, { inRecovery = true, activeConnections = 2, fail = false, replayLagSeconds = 0, walLsn = null } = {}) {
   return {
     name,
     serviceName: name,
@@ -39,7 +39,14 @@ function makeNode(name, { inRecovery = true, activeConnections = 2, fail = false
         }
         const text = typeof arg === 'string' ? arg : arg.text;
         if (text.includes('pg_stat_activity')) {
-          return { rows: [{ active_connections: activeConnections, in_recovery: inRecovery }] };
+          return {
+            rows: [{
+              active_connections: activeConnections,
+              in_recovery: inRecovery,
+              wal_lsn: walLsn,
+              replay_lag_seconds: inRecovery ? replayLagSeconds : 0
+            }]
+          };
         }
         return { rows: [{ result: 1 }] };
       }
@@ -164,8 +171,7 @@ test('updateQueryLatency blends observed latency into the running average', asyn
   assert.ok(after < 500, 'the average should be smoothed, not replaced outright');
 });
 
-test('subscribe receives cluster snapshots emitted on refresh', async () => {
-  const nodes = [makeNode('postgres-primary', { inRecovery: false }), makeNode('postgres-replica-1')];
+test('subscribe receives cluster snapshots emitted on refresh', async () => {  const nodes = [makeNode('postgres-primary', { inRecovery: false }), makeNode('postgres-replica-1')];
   const monitor = createReplicaMonitor(nodes, config);
 
   const received = [];
@@ -180,4 +186,97 @@ test('subscribe receives cluster snapshots emitted on refresh', async () => {
   const countAfterUnsubscribe = received.length;
   await monitor.refreshAll();
   assert.equal(received.length, countAfterUnsubscribe, 'unsubscribed listener should stop receiving updates');
+});
+
+test('getClusterSnapshot reports the worst-case replication lag across replicas', async () => {
+  const nodes = [
+    makeNode('postgres-primary', { inRecovery: false }),
+    makeNode('postgres-replica-1', { inRecovery: true, replayLagSeconds: 0.25 }), // 250ms
+    makeNode('postgres-replica-2', { inRecovery: true, replayLagSeconds: 1.5 })   // 1500ms
+  ];
+  const monitor = createReplicaMonitor(nodes, config);
+  await monitor.refreshAll();
+
+  const snapshot = monitor.getClusterSnapshot();
+  assert.equal(snapshot.system.replicationLagMs, 1500);
+});
+
+test('a caught-up replica reports zero replication lag', async () => {
+  const nodes = [
+    makeNode('postgres-primary', { inRecovery: false }),
+    makeNode('postgres-replica-1', { inRecovery: true, replayLagSeconds: 0 })
+  ];
+  const monitor = createReplicaMonitor(nodes, config);
+  await monitor.refreshAll();
+
+  assert.equal(monitor.getClusterSnapshot().system.replicationLagMs, 0);
+});
+
+test('recordQuery drives real latency percentiles and requests-per-second', async () => {
+  const nodes = [makeNode('postgres-primary', { inRecovery: false }), makeNode('postgres-replica-1')];
+  const monitor = createReplicaMonitor(nodes, config);
+  await monitor.refreshAll();
+
+  // 100 samples ranging 1..100ms -> p50 ~50.5, p95 ~95.05.
+  for (let ms = 1; ms <= 100; ms += 1) {
+    monitor.recordQuery(ms);
+  }
+
+  const { queries } = monitor.getClusterSnapshot();
+  assert.ok(queries.p50LatencyMs > 45 && queries.p50LatencyMs < 56, `p50 out of range: ${queries.p50LatencyMs}`);
+  assert.ok(queries.p95LatencyMs > 90 && queries.p95LatencyMs <= 100, `p95 out of range: ${queries.p95LatencyMs}`);
+  assert.ok(queries.p95LatencyMs >= queries.p50LatencyMs);
+  // All 100 samples fall in the 5s RPS window -> 100 / 5 = 20 req/s.
+  assert.ok(queries.requestsPerSecond > 0, 'requestsPerSecond should be non-zero after recording queries');
+});
+
+test('recordQuery ignores non-finite latencies', async () => {
+  const nodes = [makeNode('postgres-primary', { inRecovery: false }), makeNode('postgres-replica-1')];
+  const monitor = createReplicaMonitor(nodes, config);
+  await monitor.refreshAll();
+
+  monitor.recordQuery(NaN);
+  monitor.recordQuery(Infinity);
+  monitor.recordQuery(undefined);
+
+  assert.equal(monitor.getClusterSnapshot().queries.requestsPerSecond, 0);
+});
+
+test('refreshAll computes byte-level replication lag against the primary WAL position', async () => {
+  const nodes = [
+    // Primary current WAL position: 0x16/0x100 bytes.
+    makeNode('postgres-primary', { inRecovery: false, walLsn: '16/100' }),
+    // Replica fully caught up.
+    makeNode('postgres-replica-1', { inRecovery: true, walLsn: '16/100', replayLagSeconds: 0 }),
+    // Replica 0x40 (64) bytes behind.
+    makeNode('postgres-replica-2', { inRecovery: true, walLsn: '16/C0', replayLagSeconds: 0.5 })
+  ];
+  const monitor = createReplicaMonitor(nodes, config);
+
+  await monitor.refreshAll();
+
+  const byName = Object.fromEntries(monitor.getStateSnapshot().map((n) => [n.name, n]));
+  assert.equal(byName['postgres-replica-1'].metrics.replicationLagBytes, 0);
+  assert.equal(byName['postgres-replica-2'].metrics.replicationLagBytes, 0x100 - 0xc0); // 64 bytes
+
+  const snapshot = monitor.getClusterSnapshot();
+  assert.equal(snapshot.system.replicationLagBytes, 64);
+});
+
+test('getClusterSnapshot reports real query percentiles and throughput from recorded latencies', async () => {
+  const nodes = [
+    makeNode('postgres-primary', { inRecovery: false }),
+    makeNode('postgres-replica-1', { inRecovery: true })
+  ];
+  const monitor = createReplicaMonitor(nodes, config);
+  await monitor.refreshAll();
+
+  for (const ms of [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]) {
+    monitor.recordQuery(ms);
+  }
+
+  const { queries } = monitor.getClusterSnapshot();
+  assert.ok(queries.p50LatencyMs > 0 && queries.p50LatencyMs < queries.p95LatencyMs);
+  assert.ok(queries.p95LatencyMs <= 100);
+  assert.ok(queries.requestsPerSecond > 0, 'recent queries should yield a positive RPS');
 });

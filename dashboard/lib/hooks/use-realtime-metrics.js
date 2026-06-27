@@ -30,7 +30,10 @@ export function useRealtimeMetrics() {
     function connect() {
       if (!isMounted) return;
 
-      socket = new WebSocket(process.env.NEXT_PUBLIC_METRICS_WS_URL || 'ws://localhost:3002/ws/cluster');
+      const baseUrl = process.env.NEXT_PUBLIC_METRICS_WS_URL || 'ws://localhost:3002/ws/cluster';
+      const token = process.env.NEXT_PUBLIC_METRICS_TOKEN;
+      const url = token ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : baseUrl;
+      socket = new WebSocket(url);
 
       socket.addEventListener('message', (event) => {
         try {

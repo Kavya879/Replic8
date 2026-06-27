@@ -26,12 +26,13 @@ function makeReplica(name, { error = null, rows = [] } = {}) {
 // A configurable stub of the cluster monitor that records the calls the
 // router makes against it so we can assert on routing behaviour.
 function makeMonitor({ replicas = [], primary = null } = {}) {
-  const calls = { latency: [], failed: [], recovered: [] };
+  const calls = { latency: [], failed: [], recovered: [], recorded: [] };
   return {
     calls,
     getRoutingSnapshot: () => replicas,
     getPrimaryNode: () => primary,
     updateQueryLatency: (name, ms) => calls.latency.push({ name, ms }),
+    recordQuery: (ms) => calls.recorded.push(ms),
     markReplicaFailed: (name, message) => calls.failed.push({ name, message }),
     markReplicaRecovered: (name) => calls.recovered.push(name)
   };
@@ -47,6 +48,7 @@ test('routeRead executes against the first replica in the routing snapshot', asy
   assert.equal(result.servedBy, 'replica-1');
   assert.equal(monitor.calls.recovered[0], 'replica-1');
   assert.equal(monitor.calls.latency.length, 1);
+  assert.equal(monitor.calls.recorded.length, 1);
   assert.equal(monitor.calls.failed.length, 0);
 });
 
@@ -117,6 +119,7 @@ test('routeWrite always targets the primary node', async () => {
 
   assert.equal(poolLabel, 'primary');
   assert.equal(result.servedBy, 'primary');
+  assert.equal(monitor.calls.recorded.length, 1, 'writes should also feed the query-stats log');
 });
 
 test('routeWrite throws when there is no active primary', async () => {

@@ -22,7 +22,9 @@ function createPoolRouter(clusterMonitor) {
       if (primaryNode) {
         const startedAt = Date.now();
         const result = await primaryNode.pool.query(sql, params);
-        clusterMonitor.updateQueryLatency(primaryNode.name, Date.now() - startedAt);
+        const latencyMs = Date.now() - startedAt;
+        clusterMonitor.updateQueryLatency(primaryNode.name, latencyMs);
+        clusterMonitor.recordQuery(latencyMs);
         return {
           poolLabel: primaryNode.name,
           result
@@ -40,7 +42,9 @@ function createPoolRouter(clusterMonitor) {
 
       try {
         const result = await replica.pool.query(sql, params);
-        clusterMonitor.updateQueryLatency(replica.name, Date.now() - startedAt);
+        const latencyMs = Date.now() - startedAt;
+        clusterMonitor.updateQueryLatency(replica.name, latencyMs);
+        clusterMonitor.recordQuery(latencyMs);
         clusterMonitor.markReplicaRecovered(replica.name);
 
         return {
@@ -64,9 +68,12 @@ function createPoolRouter(clusterMonitor) {
     if (!primaryNode) {
       throw new Error('No active primary database available.');
     }
+    const startedAt = Date.now();
+    const result = await primaryNode.pool.query(sql, params);
+    clusterMonitor.recordQuery(Date.now() - startedAt);
     return {
       poolLabel: primaryNode.name,
-      result: await primaryNode.pool.query(sql, params)
+      result
     };
   }
 

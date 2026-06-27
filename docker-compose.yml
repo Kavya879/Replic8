@@ -32,6 +32,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
+      API_KEY: ${API_KEY:-}
       PRIMARY_DB_HOST: postgres-primary
       PRIMARY_DB_PORT: "5432"
       PRIMARY_DB_NAME: ${POSTGRES_DB:-appdb}
@@ -79,6 +80,25 @@ services:
       - postgres-exporter-primary
       - postgres-exporter-replica-1
       - postgres-exporter-replica-2
+    restart: unless-stopped
+    networks:
+      - pg-cluster
+      - public
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
     restart: unless-stopped
     networks:
       - pg-cluster
@@ -200,6 +220,7 @@ volumes:
   pg-replica-1-data:
   pg-replica-2-data:
   prometheus-data:
+  grafana-data:
 
 networks:
   pg-cluster:

@@ -11,7 +11,8 @@
     "test:coverage": "node --test --experimental-test-coverage",
     "bench:seed": "node benchmarks/seed.js",
     "bench": "node benchmarks/loadtest.js",
-    "bench:failover": "node benchmarks/failover.js"
+    "bench:failover": "node benchmarks/failover.js",
+    "seed:data": "node scripts/seed-data.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

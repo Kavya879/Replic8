@@ -8,6 +8,11 @@
 // Every value can be overridden with an environment variable so the same scripts
 // work from inside the cluster network or against a remote deployment.
 
+const path = require('path');
+// Load the repository-root .env so these host-run scripts pick up the same
+// database credentials Docker Compose uses (POSTGRES_USER/PASSWORD/DB).
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
+
 function toNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;

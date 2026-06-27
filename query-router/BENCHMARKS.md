@@ -72,6 +72,7 @@ Read distribution across pools:
 | `BENCH_READ_RATIO` | `0.9` | Fraction of requests that are reads (0–1). |
 | `BENCH_ROUTER_URL` | `http://localhost:3002` | Router base URL. |
 | `BENCH_SEED_ROWS` | `1000` | Rows created by the seed script. |
+| `BENCH_API_KEY` | _(unset)_ | API key sent to the router (`X-API-Key`) when `API_KEY` auth is enabled. Falls back to `API_KEY`. |
 
 PowerShell example:
 

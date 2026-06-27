@@ -15,6 +15,7 @@ function toNumber(value, fallback) {
 function loadConfig() {
   return {
     port: toNumber(process.env.PORT, 3000),
+    apiKey: (process.env.API_KEY || '').trim(),
     poolMax: toNumber(process.env.POOL_MAX, 10),
     poolConnectionTimeoutMs: toNumber(process.env.POOL_CONNECTION_TIMEOUT_MS, 5000),
     monitorIntervalMs: toNumber(process.env.MONITOR_INTERVAL_MS, 5000),
