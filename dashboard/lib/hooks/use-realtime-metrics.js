@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+const MAX_ACTIVITY_ITEMS = 50;
 
 const initialState = {
-    timestamp: null,
+  timestamp: null,
+  alerts: [],
   replicas: [],
   system: {
     cpuPercent: 0,
@@ -18,9 +21,46 @@ const initialState = {
   }
 };
 
+function formatNodeName(name) {
+  return name
+    .replace(/^postgres-/, '')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function getPrimaryNode(snapshot) {
+  return snapshot?.replicas?.find((node) => node.role === 'Primary' && node.status !== 'Down') || null;
+}
+
+function buildSyntheticActivity(previousSnapshot, nextSnapshot) {
+  const entries = [];
+  const previousPrimary = getPrimaryNode(previousSnapshot);
+  const currentPrimary = getPrimaryNode(nextSnapshot);
+
+  if (previousPrimary && previousPrimary.name !== currentPrimary?.name) {
+    entries.push({
+      timestamp: nextSnapshot.timestamp || new Date().toISOString(),
+      type: 'error',
+      message: `${formatNodeName(previousPrimary.name)} Down`
+    });
+
+    if (currentPrimary) {
+      entries.push({
+        timestamp: nextSnapshot.timestamp || new Date().toISOString(),
+        type: 'info',
+        message: `${formatNodeName(currentPrimary.name)} Promoted`
+      });
+    }
+  }
+
+  return entries;
+}
+
 export function useRealtimeMetrics() {
   const [snapshot, setSnapshot] = useState(initialState);
   const [history, setHistory] = useState([]);
+  const previousSnapshotRef = useRef(initialState);
+  const [activityLog, setActivityLog] = useState([]);
 
   useEffect(() => {
     let socket = null;
@@ -38,6 +78,7 @@ export function useRealtimeMetrics() {
       socket.addEventListener('message', (event) => {
         try {
           const payload = JSON.parse(event.data);
+          const previousSnapshot = previousSnapshotRef.current;
           setSnapshot(payload);
           setHistory((current) => [
             ...current.slice(-119),
@@ -46,6 +87,21 @@ export function useRealtimeMetrics() {
               value: payload.system?.cpuPercent || 0
             }
           ]);
+
+          if (Array.isArray(payload.alerts) && payload.alerts.length > 0) {
+            setActivityLog(payload.alerts.slice(0, MAX_ACTIVITY_ITEMS));
+          } else {
+            const syntheticActivity = buildSyntheticActivity(previousSnapshot, payload);
+
+            if (syntheticActivity.length > 0) {
+              setActivityLog((current) => [
+                ...syntheticActivity,
+                ...current
+              ].slice(0, MAX_ACTIVITY_ITEMS));
+            }
+          }
+
+          previousSnapshotRef.current = payload;
         } catch (err) {
           console.error('Error processing WebSocket message:', err);
         }
@@ -79,6 +135,7 @@ export function useRealtimeMetrics() {
 
   return {
     snapshot,
-    history
+    history,
+    activityLog
   };
 }

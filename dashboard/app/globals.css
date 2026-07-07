@@ -3,17 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --background: 222 47% 7%;
+  --background: 224 42% 6%;
   --foreground: 210 40% 98%;
-  --card: 222 38% 10%;
+  --card: 224 36% 10%;
   --card-foreground: 210 40% 98%;
-  --border: 217 33% 18%;
-  --muted: 217 25% 14%;
-  --muted-foreground: 215 20% 65%;
-  --primary: 195 100% 50%;
-  --primary-foreground: 222 47% 8%;
-  --accent: 262 83% 58%;
-  --accent-foreground: 210 40% 98%;
+  --border: 218 30% 18%;
+  --muted: 221 24% 13%;
+  --muted-foreground: 215 18% 68%;
+  --primary: 188 100% 57%;
+  --primary-foreground: 224 42% 7%;
+  --accent: 32 95% 62%;
+  --accent-foreground: 224 42% 7%;
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
 }
 
 html,
@@ -21,15 +23,24 @@ body {
   height: 100%;
 }
 
+html {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.18), transparent 35%),
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 30%),
-    hsl(var(--background));
+  font-family: var(--font-display);
+  background: #000;
   color: hsl(var(--foreground));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
   box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.22);
+  color: white;
 }

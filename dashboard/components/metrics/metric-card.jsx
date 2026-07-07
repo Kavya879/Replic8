@@ -11,7 +11,7 @@ export function MetricCard({ title, value, delta, description }) {
         {delta ? <span className="text-xs text-emerald-400">{delta}</span> : null}
       </CardHeader>
       <CardContent>
-        <div className="text-3xl font-semibold tracking-tight text-white">{value}</div>
+        <div className="text-4xl font-semibold tracking-tight text-white">{value}</div>
       </CardContent>
     </Card>
   );

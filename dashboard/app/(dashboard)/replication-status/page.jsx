@@ -8,7 +8,7 @@ export default function ReplicationStatusPage() {
   const { snapshot } = useRealtimeMetrics();
 
   // Find primary and replicas
-  const primaryNode = snapshot.replicas.find(node => node.role === 'Primary');
+  const primaryNode = snapshot.replicas.find(node => node.role === 'Primary' && node.status !== 'Down');
   const replicaNodes = snapshot.replicas.filter(node => node.role === 'Replica');
 
   return (
@@ -91,16 +91,18 @@ export default function ReplicationStatusPage() {
                   }`}
                 >
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                    replica.name === 'postgres-primary' 
+                    replica.status === 'Down' 
+                      ? 'bg-white/5 text-white/45 border border-white/10'
+                      : replica.name === 'postgres-primary' 
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' 
                       : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                   }`}>
-                    {replica.name === 'postgres-primary' ? 'Rejoined Replica' : 'Read Standby'}
+                    {replica.status === 'Down' ? 'Offline' : replica.name === 'postgres-primary' ? 'Rejoined Replica' : 'Read Standby'}
                   </span>
                   <h4 className="text-white font-semibold mt-2">{replica.name}</h4>
                   <p className="text-xs text-white/55 mt-1">Status: {replica.status}</p>
                   <p className="text-xs text-white/55">Lag: {replica.metrics?.replicationLagMs?.toFixed(0) ?? 0} ms{typeof replica.metrics?.replicationLagBytes === 'number' ? ` · ${replica.metrics.replicationLagBytes} B` : ''}</p>
-                  {replica.name === 'postgres-primary' && (
+                  {replica.name === 'postgres-primary' && replica.status !== 'Down' && (
                     <div className="mt-2 text-[10px] text-amber-300/80 bg-amber-950/30 border border-amber-900/30 py-0.5 px-2 rounded animate-pulse">
                       Rejoining Cluster As Replica
                     </div>

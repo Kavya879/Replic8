@@ -3,7 +3,7 @@ function cn(...classes) {
 }
 
 export function Card({ className, ...props }) {
-  return <div className={cn('rounded-2xl border border-white/10 bg-card/90 p-6 shadow-glow backdrop-blur', className)} {...props} />;
+  return <div className={cn('group relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] p-6 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl transition-transform duration-300 hover:-translate-y-0.5 hover:border-white/20', className)} {...props} />;
 }
 
 export function CardHeader({ className, ...props }) {
@@ -11,13 +11,13 @@ export function CardHeader({ className, ...props }) {
 }
 
 export function CardTitle({ className, ...props }) {
-  return <h3 className={cn('text-sm font-medium tracking-wide text-white/70', className)} {...props} />;
+  return <h3 className={cn('font-display text-[0.92rem] font-semibold tracking-[0.18em] text-white/78 uppercase', className)} {...props} />;
 }
 
 export function CardDescription({ className, ...props }) {
-  return <p className={cn('text-xs text-white/45', className)} {...props} />;
+  return <p className={cn('mt-1 text-xs leading-5 text-white/48', className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }) {
-  return <div className={cn('min-h-0', className)} {...props} />;
+  return <div className={cn('relative z-10 min-h-0', className)} {...props} />;
 }
