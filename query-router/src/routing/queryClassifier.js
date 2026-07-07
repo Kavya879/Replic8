@@ -20,6 +20,7 @@
 // matching keyword inside a string literal biases the decision toward the
 // primary. That is the safe direction.
 
+//Locking Query Detection
 const LOCKING_CLAUSE_REGEX = /\bfor\s+(?:no\s+key\s+update|key\s+share|update|share)\b/i;
 const DATA_MODIFYING_REGEX = /\b(?:insert|update|delete|merge)\b/i;
 const EXPLAIN_OPTION_REGEX = /^(?:(?:analyze|verbose|costs|settings|buffers|wal|timing|summary|format)\b[^\s]*\s*)+/i;
@@ -41,6 +42,13 @@ const TRANSACTION_VERBS = new Set([
 
 function decision(statementType, route, reason) {
   return { statementType, route, reason };
+}
+
+// Errors raised here are client errors (bad/unsupported SQL), so they map to HTTP 400.
+function clientError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
 }
 
 function stripLeadingComments(sql) {
@@ -105,8 +113,8 @@ function classifyExplain(statement) {
 function classifyStatement(verb, statement) {
   switch (verb) {
     case 'SELECT':
-    case 'TABLE':
-    case 'VALUES':
+    case 'TABLE': //TABLE users; Equivalent to SELECT * FROM users;
+    case 'VALUES': //VALUES (1),(2),(3);
       return LOCKING_CLAUSE_REGEX.test(statement)
         ? decision('READ', 'primary', 'locking read (FOR UPDATE/SHARE) requires the primary')
         : decision('READ', 'replica', 'read-only query');
@@ -129,26 +137,26 @@ function classifyStatement(verb, statement) {
       if (WRITE_VERBS.has(verb)) {
         return decision('WRITE', 'primary', `${verb} routed to the primary`);
       }
-      throw new Error(`Unsupported SQL statement type: ${verb}`);
+      throw clientError(`Unsupported SQL statement type: ${verb}`);
   }
 }
 
 function classifyQuery(sql) {
   if (typeof sql !== 'string' || !sql.trim()) {
-    throw new Error('SQL text is required.');
+    throw clientError('SQL text is required.');
   }
 
   const normalized = stripLeadingComments(sql);
   const match = normalized.match(/^([a-zA-Z]+)/);
 
   if (!match) {
-    throw new Error('Unable to detect the SQL statement type.');
+    throw clientError('Unable to detect the SQL statement type.');
   }
 
   const verb = match[1].toUpperCase();
 
   if (TRANSACTION_VERBS.has(verb)) {
-    throw new Error(
+    throw clientError(
       'Transaction control statements are not supported by the query router because pooled connections are not pinned to a single backend session.'
     );
   }

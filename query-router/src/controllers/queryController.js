@@ -20,10 +20,21 @@ function createQueryController(poolRouter) {
       const params = req.body && typeof req.body === 'object' && Array.isArray(req.body.params)
         ? req.body.params
         : [];
+      const executionMode = req.body && typeof req.body === 'object' && typeof req.body.executionMode === 'string'
+        ? req.body.executionMode
+        : 'auto';
+        
       const classification = classifyQuery(sql);
-      const execution = classification.route === 'replica'
-        ? await poolRouter.routeRead(sql, params)
-        : await poolRouter.routeWrite(sql, params);
+      
+      let execution;
+      if (executionMode !== 'auto' && executionMode !== '') {
+        execution = await poolRouter.executeOnNode(executionMode, sql, params);
+      } else {
+        execution = classification.route === 'replica'
+          ? await poolRouter.routeRead(sql, params)
+          : await poolRouter.routeWrite(sql, params);
+      }
+      
       const elapsedSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
 
       if (poolRouter.metrics) {

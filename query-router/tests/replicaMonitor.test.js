@@ -125,6 +125,21 @@ test('an unreachable replica is marked Down and excluded from routing', async ()
   assert.deepEqual(monitor.getRoutingSnapshot().map((n) => n.name), ['postgres-replica-1']);
 });
 
+test('a failed former primary no longer reports as Primary', async () => {
+  const nodes = [
+    makeNode('postgres-primary', { inRecovery: false, fail: true }),
+    makeNode('postgres-replica-1', { inRecovery: true, activeConnections: 2 })
+  ];
+  const monitor = createReplicaMonitor(nodes, config);
+
+  await monitor.refreshAll();
+
+  const byName = Object.fromEntries(monitor.getStateSnapshot().map((n) => [n.name, n]));
+  assert.equal(byName['postgres-primary'].status, 'Down');
+  assert.equal(byName['postgres-primary'].role, 'Replica');
+  assert.equal(monitor.getStateSnapshot().some((n) => n.role === 'Primary'), false);
+});
+
 test('markReplicaFailed removes a replica from rotation and a later refresh restores it', async () => {
   const nodes = [
     makeNode('postgres-primary', { inRecovery: false }),

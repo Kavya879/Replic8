@@ -6,12 +6,27 @@ This stack is pre-configured to work out of the box (including on Windows/macOS/
 
 ---
 
+## 📸 Screenshots
+
+![Cluster Overview](screenshots/cluster_overview.png)
+*Live cluster overview showing the primary and replicas, complete with a real-time activity log of failover events.*
+
+![Grafana Dashboard](screenshots/grafana_dashboard.png)
+*Pre-configured Grafana dashboard providing deep metrics like p95 latency, replication lag, and query throughput.*
+
+![Graphs and Control Panel](screenshots/graphs_control_panel.png)
+*Built-in interactive controls to start, stop, and restart nodes, alongside a manual query execution interface.*
+
+---
+
 ## ✨ Engineering Highlights
 
 - **Safe read/write routing.** SQL is classified before routing: plain reads go to replicas; writes, locking reads (`SELECT ... FOR UPDATE`), and data-modifying CTEs go to the primary; transaction-control and unknown statements are rejected rather than mis-routed.
 - **Weighted, health-aware load balancing.** Each replica gets a live score from CPU, memory, connections, and latency; reads go to the lowest-scoring healthy node.
 - **Automatic failover & self-healing.** A crashed primary triggers `pg_promote` on the healthiest replica; a recovered node rejoins as a standby via `pg_basebackup`.
 - **Real observability metrics.** True WAL replication lag (time **and** bytes), real query-latency percentiles (p50/p95/p99), and requests-per-second — not placeholders.
+- **Interactive Cluster Control.** A built-in dashboard panel to safely start, stop, and restart database nodes directly from the UI to simulate failover events.
+- **Manual Query Execution.** An integrated query execution panel allowing you to bypass auto-routing and explicitly test reads/writes against specific nodes.
 - **Optional API-key authentication** on the SQL endpoint and metrics WebSocket (constant-time comparison).
 - **Automated quality gates.** 75 dependency-free unit tests, a load/failover benchmark harness, and a GitHub Actions CI pipeline.
 - **Operational hygiene.** Graceful shutdown, bounded connection pools with fast-fail timeouts, and provisioned Grafana dashboards.

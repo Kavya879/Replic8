@@ -9,11 +9,6 @@ scrape_configs:
       - targets:
           - query-router:3000
 
-  - job_name: node-exporter
-    static_configs:
-      - targets:
-          - node-exporter:9100
-
   - job_name: postgres-exporter-primary
     static_configs:
       - targets:

@@ -77,9 +77,31 @@ function createPoolRouter(clusterMonitor) {
     };
   }
 
+  async function executeOnNode(nodeName, sql, params) {
+    const node = clusterMonitor.getNodeByName(nodeName);
+    if (!node) {
+      throw new Error(`Node '${nodeName}' not found or unavailable.`);
+    }
+
+    const startedAt = Date.now();
+    const result = await node.pool.query(sql, params);
+    const latencyMs = Date.now() - startedAt;
+    
+    // Only update latency/record query if it's a replica to keep primary metrics clean
+    // but for manual queries it might be fine to log them. Let's log.
+    clusterMonitor.updateQueryLatency(node.name, latencyMs);
+    clusterMonitor.recordQuery(latencyMs);
+
+    return {
+      poolLabel: node.name,
+      result
+    };
+  }
+
   return {
     routeRead,
-    routeWrite
+    routeWrite,
+    executeOnNode
   };
 }
 

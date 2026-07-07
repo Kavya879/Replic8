@@ -246,7 +246,7 @@ cd ..
 # Grafana dashboards:   http://localhost:3001   (login admin / admin)
 #   -> open "Replic8 - Query Router Overview"
 # Prometheus UI:        http://localhost:9090
-# Prometheus targets (all should be UP except the optional node-exporter):
+# Prometheus targets (query-router + the three postgres-exporters should be UP):
 #   http://localhost:9090/targets
 # Generate traffic first (section 15) so the panels have data.
 

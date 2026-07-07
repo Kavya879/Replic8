@@ -1,6 +1,8 @@
 const express = require('express');
 const client = require('prom-client');
 const { createQueryRoutes } = require('./routes/queryRoutes');
+const { createClusterRoutes } = require('./routes/clusterRoutes');
+const { createClusterController } = require('./controllers/clusterController');
 const { createApiKeyAuth } = require('./middleware/auth');
 const { errorHandler } = require('./middleware/errorHandler');
 
@@ -72,6 +74,16 @@ function updateReplicaMetrics(replicaMonitor) {
 function createApp(queryController, replicaMonitor, config = {}) {
   const app = express();
 
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-api-key');
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    next();
+  });
+
   app.use(express.json({ limit: '1mb' }));
   app.use(express.text({ type: ['text/plain', 'application/sql'], limit: '1mb' }));
 
@@ -109,6 +121,10 @@ function createApp(queryController, replicaMonitor, config = {}) {
   };
 
   app.use(createQueryRoutes(queryController, createApiKeyAuth(config.apiKey)));
+  
+  const clusterController = createClusterController(replicaMonitor);
+  app.use('/api/cluster', createClusterRoutes(clusterController, createApiKeyAuth(config.apiKey)));
+  
   app.use(errorHandler);
 
   return app;

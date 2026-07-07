@@ -28,6 +28,7 @@ const NODE_PROBE_SQL = `
     END AS replay_lag_seconds
 `;
 
+//Using these metrics, it classifies each node as Healthy, Warning, or Down based on predefined thresholds."
 function deriveStatus(metrics, config) {
   if (!metrics || metrics.status === NODE_STATUS.DOWN || metrics.unhealthy) {
     return NODE_STATUS.DOWN;
@@ -56,6 +57,7 @@ function deriveStatus(metrics, config) {
 
   return NODE_STATUS.HEALTHY;
 }
+
 
 function createReplicaMonitor(allNodes, config) {
   const state = new Map();
@@ -110,7 +112,7 @@ function createReplicaMonitor(allNodes, config) {
         name: node.name,
         serviceName: node.serviceName,
         status: metrics.status || deriveStatus(metrics, config),
-        role: metrics.role || (metrics.inRecovery ? 'Replica' : 'Primary'),
+        role: metrics.status === NODE_STATUS.DOWN ? 'Replica' : (metrics.role || (metrics.inRecovery ? 'Replica' : 'Primary')),
         metrics,
         score: metrics.score ?? Number.POSITIVE_INFINITY,
         pool: node.pool
@@ -118,15 +120,23 @@ function createReplicaMonitor(allNodes, config) {
     });
   }
 
+  function getNodeByName(name) {
+    return getNodes().find((node) => node.name === name);
+  }
+
+//Finally, it stores the latest state of every node and provides helper functions like getPrimaryNode() 
+// and getRoutingSnapshot(), which are used by the Pool Router to route queries
   function getPrimaryNode() {
     const nodes = getNodes();
     return nodes.find(node => node.role === 'Primary' && node.status !== NODE_STATUS.DOWN);
   }
 
+//"Finally, it stores the latest state of every node and provides helper functions like getPrimaryNode()
+//and getRoutingSnapshot(), which are used by the Pool Router to route queries."
   function getRoutingSnapshot() {
     return getNodes()
       .filter(node => node.role === 'Replica' && node.status !== NODE_STATUS.DOWN)
-      .sort((left, right) => {
+      .sort((left, right) => { //left and right are two variables used to custom sort
         const rank = { [NODE_STATUS.HEALTHY]: 0, [NODE_STATUS.WARNING]: 1, [NODE_STATUS.DOWN]: 2 };
         const leftRank = rank[left.status] ?? 2;
         const rightRank = rank[right.status] ?? 2;
@@ -185,6 +195,7 @@ function createReplicaMonitor(allNodes, config) {
     return () => listeners.delete(listener);
   }
 
+// It collects CPU, memory, active connections, query latency, and replication lag from each node
   async function refreshNode(node) {
     const startedAt = Date.now();
     let containerMetrics = { cpuPercent: 0, memoryPercent: 0 };
@@ -269,11 +280,14 @@ function createReplicaMonitor(allNodes, config) {
         replicationLagSeconds: 0,
         replicationLagBytes: 0,
         inRecovery,
-        role: previous.role || (inRecovery ? 'Replica' : 'Primary')
+        role: node.isConfiguredPrimary ? 'Replica' : (previous.role || (inRecovery ? 'Replica' : 'Primary'))
       });
     }
   }
 
+//"It continuously checks whether the primary database is alive. If the primary fails,
+// it selects the healthiest replica and promotes it to become the new primary 
+// using PostgreSQL's pg_promote() command
   async function refreshAll() {
     await Promise.all(allNodes.map(refreshNode));
 
@@ -523,7 +537,8 @@ function createReplicaMonitor(allNodes, config) {
     getStateSnapshot,
     getRoutingSnapshot,
     getClusterSnapshot,
-    getPrimaryNode
+    getPrimaryNode,
+    getNodeByName
   };
 }
 

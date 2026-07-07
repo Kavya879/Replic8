@@ -5,7 +5,8 @@ function clamp01(value) {
 
   return value > 1 ? 1 : value;
 }
-
+//For replica nodes, it calculates a health score using the Replica Scorer. 
+// This score is later used by the Pool Router to choose the best replica for read queries."
 function calculateReplicaScore(metrics, config) {
   if (!metrics || metrics.unhealthy) {
     return Number.POSITIVE_INFINITY;
