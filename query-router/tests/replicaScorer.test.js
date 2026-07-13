@@ -23,7 +23,7 @@ test('clamp01 treats non-finite values as zero', () => {
   assert.equal(clamp01(Infinity), 0);
   assert.equal(clamp01(-Infinity), 0);
 });
-is 
+
 test('calculateReplicaScore returns Infinity for unhealthy or missing metrics', () => {
   assert.equal(calculateReplicaScore(null, baseConfig), Number.POSITIVE_INFINITY);
   assert.equal(calculateReplicaScore({ unhealthy: true }, baseConfig), Number.POSITIVE_INFINITY);

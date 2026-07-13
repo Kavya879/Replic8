@@ -63,6 +63,7 @@ function createReplicaMonitor(allNodes, config) {
   const state = new Map();
   const listeners = new Set();
   const queryStats = createQueryStatsTracker({ windowMs: 60000, rpsWindowMs: 5000 });
+  const pendingDemotions = new Map();
   let timer = null;
   let running = false;
 
@@ -94,7 +95,7 @@ function createReplicaMonitor(allNodes, config) {
   let primaryDownAlerted = false;
   let lastActivePrimaryName = null;
   const startupTime = Date.now();
-  const gracePeriodMs = 15000;
+  const gracePeriodMs = config.failoverGracePeriodMs ?? 15000;
 
   function getNodes() {
     return allNodes.map((node) => {
@@ -195,6 +196,14 @@ function createReplicaMonitor(allNodes, config) {
     return () => listeners.delete(listener);
   }
 
+  function markDemotionPending(nodeName, reason) {
+    pendingDemotions.set(nodeName, reason);
+  }
+
+  function clearDemotionPending(nodeName) {
+    pendingDemotions.delete(nodeName);
+  }
+
 // It collects CPU, memory, active connections, query latency, and replication lag from each node
   async function refreshNode(node) {
     const startedAt = Date.now();
@@ -217,6 +226,11 @@ function createReplicaMonitor(allNodes, config) {
       const inRecovery = Boolean(row.in_recovery);
       const replicationLagSeconds = inRecovery ? Math.max(Number(row.replay_lag_seconds || 0), 0) : 0;
       const walLsn = row.wal_lsn || null;
+      const demotionReason = pendingDemotions.get(node.name) || null;
+
+      if (demotionReason && inRecovery) {
+        clearDemotionPending(node.name);
+      }
 
       const previous = state.get(node.name) || {};
       const averageLatencyMs = previous.averageLatencyMs
@@ -246,6 +260,18 @@ function createReplicaMonitor(allNodes, config) {
         role: inRecovery ? 'Replica' : 'Primary',
         score: 0
       };
+
+      if (demotionReason && !inRecovery) {
+        metrics.unhealthy = true;
+        metrics.isStale = true;
+        metrics.failureCount = Math.max(Number(previous.failureCount || 0), 1);
+        metrics.lastError = demotionReason;
+        metrics.status = NODE_STATUS.DOWN;
+        metrics.role = 'Replica';
+        metrics.score = Number.POSITIVE_INFINITY;
+        state.set(node.name, metrics);
+        return;
+      }
 
       if (inRecovery) {
         metrics.score = calculateReplicaScore(metrics, {
@@ -344,11 +370,9 @@ function createReplicaMonitor(allNodes, config) {
       if (!primaryDownAlerted) {
         addAlert('Primary Down', 'error');
         primaryDownAlerted = true;
-
-        const allNodesSnapshot = getNodes();
-        const formerPrimary = allNodesSnapshot.find(node => node.role === 'Primary' && node.status === NODE_STATUS.DOWN);
-        if (formerPrimary) {
-          lastActivePrimaryName = formerPrimary.name;
+        const configuredPrimary = allNodes.find((node) => node.isConfiguredPrimary);
+        if (configuredPrimary) {
+          lastActivePrimaryName = configuredPrimary.name;
         }
       }
 
@@ -382,6 +406,13 @@ function createReplicaMonitor(allNodes, config) {
               currentMetrics.role = 'Primary';
               currentMetrics.score = Number.POSITIVE_INFINITY;
               state.set(replicaToPromote.name, currentMetrics);
+            }
+
+            if (lastActivePrimaryName && lastActivePrimaryName !== replicaToPromote.name) {
+              markDemotionPending(
+                lastActivePrimaryName,
+                'Former primary must be rewound and rejoined as a standby replica before it can serve traffic again.'
+              );
             }
           } catch (promoteError) {
             console.error(`[Failover] Failed to promote replica ${replicaToPromote.name}:`, promoteError);

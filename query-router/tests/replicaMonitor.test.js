@@ -22,7 +22,8 @@ const config = {
   latencyTargetMs: 200,
   poolMax: 10,
   staleReplicaThresholdMs: 15000,
-  monitorIntervalMs: 5000
+  monitorIntervalMs: 5000,
+  failoverGracePeriodMs: 0
 };
 
 // Builds a fake cluster node backed by a pool that answers the two queries the
@@ -137,7 +138,64 @@ test('a failed former primary no longer reports as Primary', async () => {
   const byName = Object.fromEntries(monitor.getStateSnapshot().map((n) => [n.name, n]));
   assert.equal(byName['postgres-primary'].status, 'Down');
   assert.equal(byName['postgres-primary'].role, 'Replica');
-  assert.equal(monitor.getStateSnapshot().some((n) => n.role === 'Primary'), false);
+  assert.equal(byName['postgres-replica-1'].role, 'Primary');
+  assert.equal(monitor.getStateSnapshot().filter((n) => n.role === 'Primary').length, 1);
+});
+
+test('a former primary stays fenced until it rejoins as a standby replica', async () => {
+  let primaryFails = true;
+  let primaryInRecovery = false;
+
+  const primaryNode = {
+    name: 'postgres-primary',
+    serviceName: 'postgres-primary',
+    isConfiguredPrimary: true,
+    pool: {
+      query: async (arg) => {
+        if (primaryFails) {
+          throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
+        }
+
+        const text = typeof arg === 'string' ? arg : arg.text;
+        if (text.includes('pg_stat_activity')) {
+          return {
+            rows: [{
+              active_connections: 3,
+              in_recovery: primaryInRecovery,
+              wal_lsn: '16/100',
+              replay_lag_seconds: 0
+            }]
+          };
+        }
+
+        return { rows: [{ result: 1 }] };
+      }
+    }
+  };
+
+  const monitor = createReplicaMonitor([
+    primaryNode,
+    makeNode('postgres-replica-1', { inRecovery: true, activeConnections: 2, walLsn: '16/100' })
+  ], config);
+
+  await monitor.refreshAll();
+
+  primaryFails = false;
+  await monitor.refreshAll();
+
+  let byName = Object.fromEntries(monitor.getStateSnapshot().map((n) => [n.name, n]));
+  assert.equal(byName['postgres-primary'].status, 'Down');
+  assert.equal(byName['postgres-primary'].role, 'Replica');
+  assert.equal(byName['postgres-replica-1'].role, 'Primary');
+
+  primaryInRecovery = true;
+  await monitor.refreshAll();
+
+  byName = Object.fromEntries(monitor.getStateSnapshot().map((n) => [n.name, n]));
+  assert.equal(byName['postgres-primary'].status, 'Healthy');
+  assert.equal(byName['postgres-primary'].role, 'Replica');
+  assert.equal(monitor.getStateSnapshot().filter((n) => n.role === 'Primary').length, 1);
+  assert.equal(monitor.getRoutingSnapshot().some((n) => n.name === 'postgres-primary'), true);
 });
 
 test('markReplicaFailed removes a replica from rotation and a later refresh restores it', async () => {
